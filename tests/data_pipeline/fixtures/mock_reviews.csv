@@ -1,0 +1,9 @@
+game,identifier,message,recommendation,lang,posted,edited,at_review,total
+620,1,<b>Not good</b> — stutter at 60 FPS,false,en,2026-01-01T09:00:00+09:00,2026-01-02T00:00:00Z,15,90
+620,2,Good game!,true,english,1700000000,,0,30
+400,1,I can’t ignore this bug 😃,true,english,,,,
+400,2,Unknown language,true,,,,,
+400,3,Pas pour moi,false,french,,,,
+400,4,,true,en,,,,
+400,5,No rating,,en,,,,
+620,1,Old text,true,english,1700000000,1700000000,20,40
