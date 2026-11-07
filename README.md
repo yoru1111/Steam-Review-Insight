@@ -115,6 +115,7 @@ python -m src.data_pipeline.cli search portal
 python -m src.data_pipeline.cli collect --appid 1091500 --limit 100 --language english
 python -m src.data_pipeline.cli collect --appid 1091500 --limit 10000 --language english
 python -m src.data_pipeline.cli pipeline --source api --appid 1091500 --limit 1000
+python -m src.data_pipeline.cli pipeline --source api --appid 1091500 --limit 1000 --sample-mode balanced
 python -m src.data_pipeline.cli pipeline --source cache --appid 1091500
 python -m src.data_pipeline.cli preprocess --source csv --input data/raw/reviews.csv --mapping mapping.json
 python -m src.data_pipeline.cli validate

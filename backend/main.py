@@ -43,7 +43,7 @@ def create_app(adapter: ReviewDataAdapter | None = None) -> FastAPI:
     def analyze(payload: AnalyzeRequest, request: Request) -> dict[str, Any]:
         try:
             frame, metadata = request.app.state.data_adapter.get_reviews(
-                payload.app_id, payload.limit, payload.refresh
+                payload.app_id, payload.limit, payload.refresh, payload.sample_mode
             )
             config = AnalysisConfig()
             config.clustering.k = payload.k

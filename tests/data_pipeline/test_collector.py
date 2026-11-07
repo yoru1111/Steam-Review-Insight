@@ -31,6 +31,28 @@ def test_public_input_json_and_cursor(pipeline, transport, monkeypatch):
     assert parse_page(read_json(path))[0][0]["recommendationid"] == "1"
 
 
+def test_positive_and_negative_filters_have_independent_caches(pipeline, transport):
+    transport.queue += [
+        page(review(1, voted_up=True), cursor="positive-next"),
+        page(review(2, voted_up=False), cursor="negative-next"),
+    ]
+    positive = pipeline.collect_reviews(620, limit=1, review_type=1)
+    negative = pipeline.collect_reviews(620, limit=1, review_type=2)
+
+    assert positive["review_type_name"] == "positive"
+    assert negative["review_type_name"] == "negative"
+    request_types = [json.loads(params["input_json"][0])["review_type"]
+                     for params, _ in transport.requests]
+    assert request_types == [1, 2]
+    state = read_json(pipeline.root / "data/raw/steam/620/state.json")
+    assert state["active_by_review_type"]["1"]["run_id"] == positive["run_id"]
+    assert state["active_by_review_type"]["2"]["run_id"] == negative["run_id"]
+
+    assert pipeline.collect_reviews(620, limit=1, review_type=1)["cache_used"]
+    assert pipeline.collect_reviews(620, limit=1, review_type=2)["cache_used"]
+    assert len(transport.requests) == 2
+
+
 def test_opt_in_key_falls_back(pipeline, transport, monkeypatch, caplog):
     monkeypatch.setenv("STEAM_WEB_API_KEY", "test-secret")
     transport.queue += [http(403), page(review())]

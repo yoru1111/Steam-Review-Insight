@@ -28,6 +28,7 @@ def parser():
         options.add_argument("--language", default="english")
         if command != "preprocess":
             options.add_argument("--limit", type=int, default=1000)
+            options.add_argument("--sample-mode", choices=("recent", "balanced"), default="recent")
             options.add_argument("--sort", choices=(1, 2), type=int, default=1)
             options.add_argument("--max-requests", type=int, default=2000)
             options.add_argument("--refresh", action="store_true")
@@ -104,16 +105,28 @@ def main(argv=None):
             raise ValueError("Use pipeline --source api to collect and preprocess")
         collection = None
         if source == "api":
-            collection = pipeline.collect_reviews(
-                args.appid, args.limit, language=args.language, sort=args.sort,
-                refresh=args.refresh or args.restart, resume=not args.restart,
-                max_requests=args.max_requests, use_key=args.use_key,
-            )
+            if args.sample_mode == "balanced":
+                positive_target = args.limit // 2
+                collection = pipeline.collect_balanced_reviews(
+                    args.appid, positive_target, args.limit - positive_target,
+                    language=args.language, sort=args.sort, refresh=args.refresh or args.restart,
+                    max_requests=args.max_requests, use_key=args.use_key,
+                )
+            else:
+                collection = pipeline.collect_reviews(
+                    args.appid, args.limit, language=args.language, sort=args.sort,
+                    refresh=args.refresh or args.restart, resume=not args.restart,
+                    max_requests=args.max_requests, use_key=args.use_key,
+                )
         if args.command == "collect":
             emit(collection)
             return 2 if collection["collection_status"] != "complete" else 0
 
-        result = pipeline.preprocess_reviews(args.appid, collection=collection, encoding=args.encoding)
+        result = (
+            pipeline.preprocess_balanced_reviews(args.appid, collection, encoding=args.encoding)
+            if collection and collection.get("sample_mode") == "balanced"
+            else pipeline.preprocess_reviews(args.appid, collection=collection, encoding=args.encoding)
+        )
         exported = pipeline.export_game(result, args.encoding)
         emit({"collection": collection or pipeline.get_collection_status(args.appid),
               "processed": result, "exported_default": exported})

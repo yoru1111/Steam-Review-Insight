@@ -12,9 +12,11 @@ class MockAdapter:
     def search_games(self, query):
         return [{"app_id": 999, "name": "Fixture Game"}]
 
-    def get_reviews(self, app_id, limit, refresh):
+    def get_reviews(self, app_id, limit, refresh, sample_mode="recent"):
         return self.frame.head(limit), {"game_name": "Fixture Game", "cache_used": not refresh,
-                                        "data_source": "mock"}
+                                        "data_source": "mock", "sample_mode": sample_mode,
+                                        "sampling": ({"mode": "balanced", "is_population_representative": False}
+                                                     if sample_mode == "balanced" else None)}
 
 
 def test_health():
@@ -28,6 +30,17 @@ def test_search_and_analyze(reviews_df):
         response = client.post("/api/analyze", json={"app_id": 999, "limit": 12, "k": 4, "refresh": False})
         assert response.status_code == 200, response.text
         assert response.json()["metadata"]["cache_used"] is True
+
+
+def test_analyze_accepts_balanced_sample_mode(reviews_df):
+    with TestClient(create_app(MockAdapter(reviews_df))) as client:
+        response = client.post(
+            "/api/analyze",
+            json={"app_id": 999, "limit": 12, "k": 4, "sample_mode": "balanced"},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["sample_mode"] == "balanced"
+    assert response.json()["metadata"]["sampling"]["is_population_representative"] is False
 
 
 def test_invalid_app_id():

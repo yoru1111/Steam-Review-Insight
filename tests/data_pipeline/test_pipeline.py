@@ -101,3 +101,59 @@ def test_offline_csv_fallback_is_typed(pipeline, transport):
     assert result["data_source"] == result["source"] == "csv" and result["cache_used"]
     assert result["error"] == "Steam HTTP 404"
     assert frame["steam_purchase"].isna().all()
+
+
+def test_balanced_sample_deduplicates_and_records_population_metadata(pipeline, transport):
+    transport.queue += [
+        page(review(1, "positive old", voted_up=True),
+             review(1, "positive new", voted_up=True, timestamp_updated=1700000100), cursor="p2"),
+        page(review(2, "positive second", voted_up=True)),
+        page(review(3, "negative first", voted_up=False), review(4, "negative second", voted_up=False)),
+    ]
+
+    frame, metadata = pipeline.get_reviews(620, 4, False, "balanced")
+
+    assert frame["voted_up"].tolist() == [True, False, True, False]
+    assert frame["review_id"].is_unique
+    assert frame.loc[frame.review_id == "1", "review_text"].item() == "positive new"
+    assert metadata["sample_mode"] == "balanced"
+    assert metadata["requests"] == 3
+    assert metadata["api_limit_error"] is False
+    assert metadata["sampling"]["target_counts"] == {"positive": 2, "negative": 2}
+    assert metadata["sampling"]["selected_counts"] == {"positive": 2, "negative": 2}
+    assert metadata["sampling"]["duplicates_removed"] == 1
+    assert metadata["sampling"]["is_population_representative"] is False
+    assert metadata["sampling"]["matching_population"]["positive_ratio"] == 0.5
+
+    cached, cached_metadata = pipeline.get_reviews(620, 4, False, "balanced")
+    assert cached.equals(frame)
+    assert cached_metadata["cache_used"]
+    assert len(transport.requests) == 3
+
+
+def test_balanced_sample_reports_a_short_label_without_duplicates(pipeline, transport):
+    transport.queue += [
+        page(review(1, "positive one", voted_up=True), review(2, "positive two", voted_up=True)),
+        page(review(3, "only negative", voted_up=False), cursor="n2"),
+        page(),
+    ]
+
+    frame, metadata = pipeline.get_reviews(620, 4, False, "balanced")
+
+    assert len(frame) == 3 and frame["review_id"].is_unique
+    assert metadata["sampling"]["selected_counts"] == {"positive": 2, "negative": 1}
+    assert "negative" in metadata["sampling"]["shortages"]
+    assert metadata["sampling"]["selected_ratios"]["positive"] == pytest.approx(2 / 3)
+
+
+def test_balanced_sample_rechecks_labels_returned_by_steam_filters(pipeline, transport):
+    transport.queue += [
+        page(review(1, "positive", voted_up=True)),
+        page(review(2, "wrong label", voted_up=True)),
+    ]
+
+    frame, metadata = pipeline.get_reviews(620, 2, False, "balanced")
+
+    assert frame["voted_up"].tolist() == [True]
+    assert metadata["sampling"]["filter_label_mismatches"] == {"positive": 0, "negative": 1}
+    assert "mismatched voted_up" in metadata["sampling"]["shortages"]["negative"]

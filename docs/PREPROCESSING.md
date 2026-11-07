@@ -12,6 +12,20 @@ Steamworks의 `IUserReviewsService/GetAppReviews/v1/`에 GET 요청을 보낸다
 `--use-key`를 함께 설정한다. 인증 거절 시 공개 요청으로 한 번 전환한다.
 [Steamworks API 명세](https://partner.steamgames.com/doc/webapi/IUserReviewsService)
 
+기본 `recent` 표본은 기존과 같이 `review_type=0`으로 최신 추천·비추천 리뷰를 함께 받는다.
+분석용 `balanced` 표본은 공식 enum인 Positive(`review_type=1`)와
+Negative(`review_type=2`)를 독립적으로 요청한다. 기본 목표는 각각 500건이다. 두 필터는
+별도 커서와 원본 캐시를 사용하며, 한쪽 결과가 부족하면 확보한 고유 리뷰만 게시하고 부족 사유를
+메타데이터에 남긴다. 중복을 채우기 위해 같은 리뷰를 반복하지 않는다.
+
+```bash
+python -m src.data_pipeline.cli pipeline --source api --appid 1091500 --limit 1000 --sample-mode balanced
+```
+
+`sampling.matching_population`은 각 필터 응답의 `total_matching`으로 계산한 API 조건 내 실제
+추천·비추천 분포다. `sampling.selected_counts`와 `selected_ratios`는 분석을 위해 구성한 표본이다.
+균형 표본의 50:50은 설계된 표본 비율이며 전체 Steam 사용자 평가 비율이 아니다.
+
 | 응답 필드 | 처리 |
 | --- | --- |
 | `response.reviews` | 리뷰 객체 배열. 페이지의 원본 응답을 JSON으로 보존 |
@@ -121,7 +135,8 @@ API 응답은 페이지 단위로, 게임별 정제 결과는 스냅샷 단위�
 | `preprocess_reviews(app_id)` | int → dict | 네트워크 없이 게임별 원본을 정제하고 결과 경로, 건수, 성공 여부 반환. 사용 가능한 원본이나 정제 캐시가 없으면 CollectionError, 검증 실패는 ValueError |
 | `get_processed_reviews(app_id)` | int → pandas.DataFrame | 이미 저장된 게임별 정제 결과를 즉시 읽음. 검증된 빈 게임은 컬럼을 가진 빈 DataFrame. 결과 미생성은 CollectionError |
 | `get_collection_status(app_id)` | int → dict | 네트워크 없이 최근 시도, 활성 데이터 상태와 시각, 캐시 나이, 정제 여부를 조회. 미수집은 `not_started` |
-| `get_reviews(app_id, limit, refresh)` | int, int, bool → tuple[pandas.DataFrame, dict] | 수집 및 필요시 정제 후 시스템 팀 규격으로 반환. `limit`만큼 최대 반환. `refresh=True`는 새 수집을 시작하며 실패 시 캐시로 대체. 사용 가능한 데이터가 없으면 CollectionError |
+| `get_reviews(app_id, limit, refresh, sample_mode="recent")` | int, int, bool, str → tuple[pandas.DataFrame, dict] | `recent`는 기존 최신 표본, `balanced`는 limit을 절반씩 추천·비추천 목표로 나눔. 수집 및 정제 후 시스템 팀 규격으로 반환 |
+| `get_balanced_reviews(app_id, limit=1000, refresh=False)` | int, int, bool → tuple[pandas.DataFrame, dict] | 추천·비추천을 독립 수집해 ID 중복 제거 후 교차 배치. 모집단·표본 분포, 요청 수, 부족 사유를 `sampling` 메타데이터로 반환 |
 
 수집 상태의 `collection_status`는 최근 시도, `data_status`는 실제 제공하는 데이터 상태다.
 `get_reviews`의 메타데이터는 분석 응답이 읽는 `data_source`에도 `source`와 같은 값을 제공한다.

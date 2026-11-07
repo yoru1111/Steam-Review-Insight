@@ -17,17 +17,25 @@ from .storage import now, read_json, write_json
 ENDPOINT = "https://api.steampowered.com/IUserReviewsService/GetAppReviews/v1/"
 LOG = logging.getLogger(__name__)
 RETRYABLE = {429, 500, 502, 503, 504}
+REVIEW_TYPES = {0: "all", 1: "positive", 2: "negative"}
 
 
 class CollectionError(RuntimeError):
     """A collection error with a safe, URL-free message."""
 
 
-def request_parameters(app_id, language="english", sort=1, cursor="*", page_size=100):
+def request_parameters(app_id, language="english", sort=1, cursor="*", page_size=100, review_type=0):
     return {"input_json": json.dumps({
-        "appid": app_id, "filter": sort, "languages": [language], "review_type": 0,
+        "appid": app_id, "filter": sort, "languages": [language], "review_type": review_type,
         "purchase_type": 1, "num_per_page": page_size, "cursor": cursor,
     }, separators=(",", ":"))}
+
+
+def active_run(state, review_type=0):
+    """Read old all-review state and new label-filtered state without migrating files."""
+    if review_type == 0:
+        return state.get("active")
+    return (state.get("active_by_review_type") or {}).get(str(review_type))
 
 
 def parse_page(payload):
@@ -80,8 +88,8 @@ class SteamClient:
         self.key = os.environ.get("STEAM_WEB_API_KEY", "").strip() if use_key else ""
         self.requests = 0
 
-    def page(self, app_id, language, sort, cursor, page_size):
-        params = request_parameters(app_id, language, sort, cursor, page_size)
+    def page(self, app_id, language, sort, cursor, page_size, review_type=0):
+        params = request_parameters(app_id, language, sort, cursor, page_size, review_type)
         attempt = 0
         while True:
             if self.requests >= self.max_requests:
@@ -134,11 +142,12 @@ def review_versions(reviews):
     )
 
 
-def collect(directory, state, client, game_id, limit, language, sort, *, resume, known_game):
+def collect(directory, state, client, game_id, limit, language, sort, *, resume, known_game, review_type=0):
     old = state.get("attempt")
-    options = {"limit": limit, "language": language, "sort": sort}
+    options = {"limit": limit, "language": language, "sort": sort, "review_type": review_type}
     if (resume and old and old["status"] in {"partial", "running", "failed"}
-            and old.get("resumable", True) and all(old[k] == v for k, v in options.items())):
+            and old.get("resumable", True)
+            and all(old.get(k, 0 if k == "review_type" else None) == v for k, v in options.items())):
         run = {**old, "status": "running", "error": None, "finished_at_utc": None}
     else:
         run = {
@@ -166,7 +175,7 @@ def collect(directory, state, client, game_id, limit, language, sort, *, resume,
         while True:
             cursor = run["cursor"]
             page_size = min(100, max(1, limit - len(identifiers)))
-            payload = client.page(game_id, language, sort, cursor, page_size)
+            payload = client.page(game_id, language, sort, cursor, page_size, review_type)
             reviews, next_cursor, summary, total = parse_page(payload)
             if len(reviews) > page_size:
                 raise CollectionError("Steam returned more reviews than requested")
@@ -180,7 +189,7 @@ def collect(directory, state, client, game_id, limit, language, sort, *, resume,
                 **run, "pages": run["pages"] + 1, "raw_count": run["raw_count"] + len(reviews),
                 "review_count": len(identifiers), "cursor": next_cursor, "seen_cursors": seen,
                 "last_page_at_utc": now(), "requests": previous_requests + client.requests,
-                "total_matching": total if total is not None else run["total_matching"],
+                "total_matching": total if not run["pages"] and total is not None else run["total_matching"],
                 "query_summary": summary if not run["pages"] else run["query_summary"],
             }
             if not reviews and not run["pages"] and not known_game:
@@ -198,8 +207,13 @@ def collect(directory, state, client, game_id, limit, language, sort, *, resume,
                 checkpoint["finished_at_utc"] = now()
             next_state = {**state, "attempt": checkpoint}
             # An empty refresh never displaces a nonempty raw snapshot.
-            if checkpoint["status"] == "complete" and (identifiers or not state.get("active")):
-                next_state["active"] = checkpoint
+            if checkpoint["status"] == "complete" and (identifiers or not active_run(state, review_type)):
+                if review_type == 0:
+                    next_state["active"] = checkpoint
+                else:
+                    next_state["active_by_review_type"] = {
+                        **(state.get("active_by_review_type") or {}), str(review_type): checkpoint,
+                    }
             save(next_state)
             state, run = next_state, checkpoint
             if run["status"] != "running":

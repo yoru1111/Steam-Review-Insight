@@ -14,16 +14,20 @@
 요청:
 
 ```json
-{"app_id": 1091500, "limit": 1000, "k": 5, "refresh": false}
+{"app_id": 1091500, "limit": 1000, "k": 5, "refresh": false, "sample_mode": "balanced"}
 ```
 
-`app_id > 0`, `2 <= limit <= 10000`, `2 <= k <= 50`입니다. 동기 요청이며 응답 최상위에는
+`sample_mode`는 기존 동작인 `recent`가 기본값이며 `balanced`를 선택하면 추천·비추천 목표를
+절반씩 나눕니다. `app_id > 0`, `2 <= limit <= 10000`, `2 <= k <= 50`입니다. 동기 요청이며 응답 최상위에는
 `game`, `summary`, `sentiment`, `clustering`, `clusters`, `priorities`, `metadata`, `warnings`가
 있습니다. 분석 입력 오류는 `422`, Adapter 미연결은 `503`, 예상하지 못한 오류는 `500`입니다.
 
 각 cluster는 번호, 개수, 상위 키워드, 참고 이슈 유형, Steam 추천/비추천 비율, VADER 통계와
 대표 리뷰를 포함합니다. 각 priority는 이슈 유형, 개수, 전체 대비 비율, 부정 비율, 평균 compound,
 부정 강도, 점수, 대표 리뷰와 `score_basis`를 포함합니다.
+
+균형 모드 응답의 `metadata.sampling`에는 실제 API 조건의 모집단 분포와 분석 표본 분포가 별도로
+포함됩니다. `selected_ratios`의 50:50은 분석 설계이며 Steam 전체 평가 비율이 아닙니다.
 
 ## `GET /api/analyze/status/{job_id}`
 
