@@ -7,7 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.analysis import AnalysisConfig, analyze_reviews
 from src.analysis.exceptions import AnalysisError
 
-from .data_adapter import DataPipelineUnavailable, ReviewDataAdapter, UnavailableDataAdapter
+from .data_adapter import (
+    DataPipelineUnavailable,
+    ReviewDataAdapter,
+    UnavailableDataAdapter,
+    create_default_adapter,
+)
 from .schemas import AnalyzeRequest
 
 
@@ -58,4 +63,4 @@ def create_app(adapter: ReviewDataAdapter | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+app = create_app(create_default_adapter())

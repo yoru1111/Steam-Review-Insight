@@ -1,0 +1,11 @@
+{
+  "app_id": "game",
+  "review_id": "identifier",
+  "review_text": "message",
+  "voted_up": "recommendation",
+  "language": "lang",
+  "created_at_utc": "posted",
+  "updated_at_utc": "edited",
+  "playtime_at_review_minutes": "at_review",
+  "playtime_forever_minutes": "total"
+}

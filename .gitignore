@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pipeline-deps/
+.pipeline-test-work/
 .coverage
 htmlcov/
 
@@ -12,3 +14,11 @@ htmlcov/
 
 # Logs
 *.log
+
+# Local data pipeline outputs
+/data/raw/
+/data/processed/
+/data/catalog.local.json
+/reports/
+*.csv
+!tests/data_pipeline/fixtures/*.csv
