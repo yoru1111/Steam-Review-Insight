@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Steam Review Insight</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1 class="brand"><span aria-hidden="true">⚡</span> Steam Review Insight</h1>
+      <div class="mode-switch" role="radiogroup" aria-label="보기 방식">
+        <button type="button" role="radio" data-mode="simple" aria-checked="true">간단히</button>
+        <button type="button" role="radio" data-mode="detail" aria-checked="false">자세히</button>
+      </div>
+      <span id="server-status" class="status" title="서버 확인 중"><span class="status-text">서버 확인 중…</span></span>
+    </div>
+  </header>
+
+  <main>
+    <section class="card panel" aria-labelledby="panel-title">
+      <h2 id="panel-title" class="panel-title">분석할 게임</h2>
+      <form id="search-form" class="search" role="search">
+        <input id="query" type="search" placeholder="게임 이름으로 검색 (예: Cyberpunk)" maxlength="100"
+               autocomplete="off" aria-label="게임 이름">
+        <button type="submit" class="btn">검색</button>
+      </form>
+      <ul id="search-results" class="search-results" hidden></ul>
+      <form id="analyze-form" class="analyze">
+        <label class="field">App ID
+          <input id="app-id" type="number" min="1" required placeholder="1091500">
+        </label>
+        <label class="field">리뷰 수
+          <input id="limit" type="number" min="2" max="10000" value="1000" required>
+        </label>
+        <label class="field detail-only">군집 수 (k)
+          <input id="k" type="number" min="2" max="50" value="5" required>
+        </label>
+        <label class="check"><input id="refresh" type="checkbox"> 새로 수집</label>
+        <button id="analyze-btn" type="submit" class="btn btn-primary">분석 시작</button>
+      </form>
+      <p id="selected-game" class="selected" aria-live="polite"></p>
+    </section>
+
+    <div id="output" aria-live="polite">
+      <div class="card state">
+        <p class="state-title">아직 분석한 게임이 없어요</p>
+        <p class="muted">게임을 검색해서 고르거나 App ID를 입력한 뒤 <b>분석 시작</b>을 눌러 주세요.</p>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

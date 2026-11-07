@@ -39,3 +39,13 @@ def test_unconnected_adapter_and_status():
         assert client.get("/api/games/search", params={"query": "game"}).status_code == 503
         assert client.post("/api/analyze", json={"app_id": 10}).status_code == 503
         assert client.get("/api/analyze/status/not-real").status_code == 501
+
+
+def test_frontend_served_without_shadowing_api():
+    with TestClient(create_app()) as client:
+        page = client.get("/")
+        assert page.status_code == 200
+        assert "Steam Review Insight" in page.text
+        assert client.get("/app.js").status_code == 200
+        assert client.get("/api/health").json()["status"] == "ok"
+        assert client.get("/docs").status_code == 200
