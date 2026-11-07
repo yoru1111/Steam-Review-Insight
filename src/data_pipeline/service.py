@@ -252,7 +252,8 @@ class ReviewPipeline:
             raise CollectionError("No compatible processed data is available for the requested language")
         frame = self._read_processed(result).head(limit)
         metadata = {
-            **collection, "source": result["source"], "processed_rows": len(frame),
+            **collection, "source": result["source"], "data_source": result["source"],
+            "processed_rows": len(frame),
             "cache_used": collection["cache_used"] or result.get("cache_used", False),
             "preprocessing_success": result["preprocessing_success"],
             "processed_matches_raw": bool(collection["run_id"] and collection["run_id"] == result["raw_run_id"]),

@@ -124,6 +124,7 @@ API 응답은 페이지 단위로, 게임별 정제 결과는 스냅샷 단위�
 | `get_reviews(app_id, limit, refresh)` | int, int, bool → tuple[pandas.DataFrame, dict] | 수집 및 필요시 정제 후 시스템 팀 규격으로 반환. `limit`만큼 최대 반환. `refresh=True`는 새 수집을 시작하며 실패 시 캐시로 대체. 사용 가능한 데이터가 없으면 CollectionError |
 
 수집 상태의 `collection_status`는 최근 시도, `data_status`는 실제 제공하는 데이터 상태다.
+`get_reviews`의 메타데이터는 분석 응답이 읽는 `data_source`에도 `source`와 같은 값을 제공한다.
 `source`, `cache_used`, `review_count`, `raw_count`, `last_collected_at_utc`,
 `cache_age_seconds`, `cache_stale`, `processed_rows`, `preprocessing_success`, `error`를
 사용할 수 있다. 상태 조회 함수의 `cache_used`는 현재 호출에서 캐시를 대체 데이터로 읽었는지

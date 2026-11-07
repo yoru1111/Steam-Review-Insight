@@ -72,6 +72,7 @@ def test_game_search_selection_separation_and_cache(pipeline, transport):
     assert len(df[df["review_clean"].str.contains("bug", regex=False)]) == 1
     assert not other["review_clean"].str.contains("bug", regex=False).any()
     assert not fresh["cache_used"] and fresh["preprocessing_success"]
+    assert fresh["data_source"] == fresh["source"] == "api"
     reused, metadata = pipeline.get_reviews(400, 1, False)
     assert reused.equals(df) and metadata["cache_used"]
     assert len(transport.requests) == 2
@@ -97,6 +98,6 @@ def test_offline_csv_fallback_is_typed(pipeline, transport):
     transport.queue += [HTTPError(ENDPOINT, 404, "test", None, None)]
     frame, result = pipeline.get_reviews(620, 5, True)
     assert frame.equals(cached) and tuple(frame.columns) == COLUMNS
-    assert result["source"] == "csv" and result["cache_used"]
+    assert result["data_source"] == result["source"] == "csv" and result["cache_used"]
     assert result["error"] == "Steam HTTP 404"
     assert frame["steam_purchase"].isna().all()
