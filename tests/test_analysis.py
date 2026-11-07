@@ -43,6 +43,12 @@ def test_missing_column_and_empty_frame(reviews_df):
         analyze_reviews(reviews_df.iloc[0:0])
 
 
+def test_voted_up_must_be_boolean(reviews_df):
+    as_strings = reviews_df.assign(voted_up=reviews_df["voted_up"].map(str))
+    with pytest.raises(InputValidationError, match="voted_up"):
+        analyze_reviews(as_strings)
+
+
 def test_k_greater_than_reviews(reviews_df):
     vectors, _ = vectorize_reviews(reviews_df.head(2))
     with pytest.raises(ClusteringError):

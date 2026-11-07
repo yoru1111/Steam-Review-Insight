@@ -35,7 +35,8 @@ config.clustering.k = 5
 result = analyze_reviews(processed_dataframe, config)
 ```
 
-필수 컬럼은 `review_text`, `review_clean`, `voted_up`입니다. `app_id`, `game_name`,
+필수 컬럼은 `review_text`, `review_clean`, `voted_up`입니다. `voted_up`은 bool 타입이어야 하며
+`"True"`/`"False"` 문자열이면 `InputValidationError`(API `422`)가 발생합니다. `app_id`, `game_name`,
 `review_id`가 있으면 결과 식별자에 사용합니다. 기존 `sentiment`와 `voted_up`은 수정하지 않고
 VADER 결과를 `sentiment_score`, `sentiment_label`로 별도 생성합니다.
 
