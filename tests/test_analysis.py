@@ -6,7 +6,7 @@ import pytest
 from src.analysis.clustering import cluster_reviews
 from src.analysis.config import AnalysisConfig, ClusteringConfig, PriorityWeights, TfidfConfig
 from src.analysis.exceptions import ClusteringError, EmptyVocabularyError, InputValidationError
-from src.analysis.issue_detection import classify_text
+from src.analysis.issue_detection import add_issue_types, classify_text, detect_complaint
 from src.analysis.pipeline import analyze_reviews
 from src.analysis.priority import calculate_priorities
 from src.analysis.sentiment import analyze_sentiment
@@ -66,7 +66,41 @@ def test_sentiment_does_not_overwrite_steam_label(reviews_df):
 
 def test_issue_multilabel_and_unclassified():
     assert classify_text("Crash and low FPS performance") == ["Bugs / Crashes", "Performance / Optimization"]
-    assert classify_text("A poetic adventure") == ["Other / Unclassified"]
+    assert classify_text("A poetic adventure") == []
+
+
+@pytest.mark.parametrize(("text", "complaint", "issues"), [
+    ("I love the gameplay", False, []),
+    ("I haven't encountered any bugs", False, []),
+    ("Great game, but it still has bugs", True, ["Bugs / Crashes"]),
+    ("I cannot finish the quest", True, ["Bugs / Crashes", "Gameplay"]),
+    ("The game runs slowly even on low settings", True, ["Performance / Optimization"]),
+])
+def test_complaint_context_rules(text, complaint, issues):
+    assert detect_complaint(text) is complaint
+    assert classify_text(text) == issues
+
+
+@pytest.mark.parametrize(("text", "complaint", "issues"), [
+    ("Combat feels responsive and fun", False, []),
+    ("No crashes anymore and performance is great", False, []),
+    ("The inventory menu is confusing", True, ["UI / Usability"]),
+    ("The quest is stuck and I cannot progress", True, ["Bugs / Crashes", "Gameplay"]),
+    ("It is overpriced and not worth the money", True, ["Monetization"]),
+])
+def test_complaint_rules_on_holdout_synthetic_phrases(text, complaint, issues):
+    assert detect_complaint(text) is complaint
+    assert classify_text(text) == issues
+
+
+def test_add_issue_types_separates_complaint_from_steam_vote():
+    frame = pd.DataFrame({
+        "review_clean": ["great game but it still has bugs", "i love the gameplay"],
+        "voted_up": [True, False],
+    })
+    result = add_issue_types(frame)
+    assert result["is_complaint"].tolist() == [True, False]
+    assert result["issue_types"].tolist() == [["Bugs / Crashes"], []]
 
 
 def test_pipeline_result_and_json(reviews_df):
@@ -81,7 +115,6 @@ def test_pipeline_result_and_json(reviews_df):
 
 def test_priorities_range_and_order(reviews_df):
     frame = analyze_sentiment(reviews_df)
-    from src.analysis.issue_detection import add_issue_types
     priorities = calculate_priorities(add_issue_types(frame))
     scores = [p["priority_score"] for p in priorities]
     assert all(0 <= score <= 1 for score in scores)
