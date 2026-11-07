@@ -93,6 +93,74 @@ def test_complaint_rules_on_holdout_synthetic_phrases(text, complaint, issues):
     assert classify_text(text) == issues
 
 
+@pytest.mark.parametrize(("text", "issue"), [
+    ("The game won't launch after the loading screen", "Bugs / Crashes"),
+    ("The game doesnt even start after the patch", "Bugs / Crashes"),
+    ("Enemy AI is dumb and ruins combat", "Gameplay"),
+    ("Enemy AI still has major flaws", "Gameplay"),
+    ("The HUD is confusing", "UI / Usability"),
+    ("Key rebinding issues make the controls frustrating", "UI / Usability"),
+    ("Hardware compatibility issues make it unplayable on older GPUs", "Performance / Optimization"),
+    ("The update is unplayable if you use an old graphics card", "Performance / Optimization"),
+    ("This edition costs too much", "Monetization"),
+    ("The story is poorly written", "Story / Narrative"),
+    ("Story choices rarely matter", "Story / Narrative"),
+    ("There is too much dialogue", "Story / Dialogue Length"),
+    ("There is too much unnecessary text", "Story / Dialogue Length"),
+    ("Exploration is limited and the open world feels lifeless", "Content / Open World"),
+    ("Character customization is disappointing", "Customization"),
+    ("Character customization is quite limited", "Customization"),
+    ("I wish we could customize vehicles", "Customization"),
+    ("There is no developer communication", "Developer Support"),
+    ("The developers do not seem to fix reported problems", "Developer Support"),
+    ("They don't even seem to address reported issues", "Developer Support"),
+    ("Quest design is confusing", "Quest / Progression Design"),
+    ("Waiting forever to trigger new missions is frustrating", "Quest / Progression Design"),
+])
+def test_high_confidence_issue_expressions(text, issue):
+    assert detect_complaint(text) is True
+    assert issue in classify_text(text)
+
+
+@pytest.mark.parametrize("text", [
+    "The game launches quickly and loading is smooth",
+    "Enemy AI is smart and combat is fun",
+    "The HUD and inventory are easy to use",
+    "It runs well on my older graphics card",
+    "The price is fair and worth the money",
+    "The story and writing are excellent",
+    "The dialogue is concise and enjoyable",
+    "The open world is beautiful and exploration is rewarding",
+    "Character customization is excellent",
+    "The developers communicate and release useful fixes",
+    "Quest design and mission pacing are great",
+])
+def test_issue_nouns_in_praise_are_not_issues(text):
+    assert detect_complaint(text) is False
+    assert classify_text(text) == []
+
+
+@pytest.mark.parametrize("text", ["The game is not interesting", "This game sux"])
+def test_clear_short_complaints_remain_unclassified_issues(text):
+    assert detect_complaint(text) is True
+    assert classify_text(text) == ["Other / Unclassified"]
+
+
+@pytest.mark.parametrize("text", [
+    "The black screen was fixed",
+    "The HUD is not confusing",
+    "The missions aren't repetitive",
+    "The price isn't expensive",
+    "The story isn't bad",
+    "The dialogue is not too long",
+    "Exploration is not limited",
+    "Customization is not disappointing",
+])
+def test_negated_or_resolved_quality_problems_are_not_issues(text):
+    assert detect_complaint(text) is False
+    assert classify_text(text) == []
+
+
 def test_add_issue_types_separates_complaint_from_steam_vote():
     frame = pd.DataFrame({
         "review_clean": ["great game but it still has bugs", "i love the gameplay"],
@@ -120,6 +188,22 @@ def test_priorities_range_and_order(reviews_df):
     assert all(0 <= score <= 1 for score in scores)
     assert scores == sorted(scores, reverse=True)
     assert all("score_basis" in item for item in priorities)
+
+
+def test_new_issue_categories_flow_to_priorities_with_representative_reviews():
+    frame = pd.DataFrame([
+        {"review_id": 1, "review_text": "The story is poorly written", "review_clean": "the story is poorly written", "voted_up": False},
+        {"review_id": 2, "review_text": "Character customization is limited", "review_clean": "character customization is limited", "voted_up": False},
+        {"review_id": 3, "review_text": "The story is excellent", "review_clean": "the story is excellent", "voted_up": True},
+    ])
+    priorities = calculate_priorities(add_issue_types(analyze_sentiment(frame)))
+    by_type = {item["issue_type"]: item for item in priorities}
+
+    assert by_type["Story / Narrative"]["review_count"] == 1
+    assert by_type["Customization"]["review_count"] == 1
+    assert by_type["Story / Narrative"]["representative_reviews"][0]["review_id"] == 1
+    assert by_type["Customization"]["representative_reviews"][0]["review_id"] == 2
+    assert all(item["issue_type"] != "Other / Unclassified" for item in priorities)
 
 
 def test_invalid_priority_weights():
