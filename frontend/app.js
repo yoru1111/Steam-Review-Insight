@@ -11,18 +11,27 @@ const ISSUES = {
   "Gameplay": ["게임플레이", "gameplay", "🎮"],
   "UI / Usability": ["UI·사용성", "ui", "🧭"],
   "Monetization": ["과금", "money", "💰"],
-  [OTHER]: ["분류 안 됨", "other", "💬"],
+  "Story / Narrative": ["스토리", "story", "📖"],
+  "Story / Dialogue Length": ["대사 길이", "dialogue", "💬"],
+  "Content / Open World": ["콘텐츠·오픈월드", "content", "🗺️"],
+  "Customization": ["커스터마이징", "custom", "🎨"],
+  "Developer Support": ["개발사 지원", "devsupport", "🛠️"],
+  "Quest / Progression Design": ["퀘스트·진행", "quest", "🎯"],
+  [OTHER]: ["기타 불만", "other", "📝"],
 };
 
 const MODE_KEY = "sri-view-mode";
+const MIN_COMPLAINT_REVIEWS = 3;
 
 const ERROR_TITLES = {
   422: "입력값이나 리뷰 데이터를 확인해 주세요",
   500: "분석 중 서버 오류가 났어요",
   501: "아직 지원하지 않는 기능이에요",
   502: "게임 검색에 실패했어요",
-  503: "리뷰 수집 모듈이 아직 연결되지 않았어요",
+  503: "리뷰 데이터를 가져올 수 없어요",
 };
+
+const BALANCED_NOTE = "추천·비추천 리뷰를 반반씩 골라 분석했어요. 표본의 추천 비율은 일부러 맞춘 값이라 Steam 전체 비율이 아니에요.";
 
 const WARNINGS = [
   [/^Silhouette score is very low/, () => "군집 분리도가 매우 낮아요. 묶음 사이 경계가 약할 수 있어요."],
@@ -43,7 +52,7 @@ function el(tag, attrs = {}, ...children) {
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
     else node.setAttribute(key, value === true ? "" : value);
   }
-  for (const child of children.flat()) {
+  for (const child of children.flat(Infinity)) {
     if (child == null || child === false || child === "") continue;
     node.append(child instanceof Node ? child : String(child));
   }
@@ -55,6 +64,25 @@ const pct = (x, digits = 0) => `${(x * 100).toFixed(digits)}%`;
 const width = (x) => `width:${Math.min(100, Math.max(0, x * 100))}%`;
 const signed = (x) => `${x > 0 ? "+" : ""}${x.toFixed(2)}`;
 const issueLabel = (type) => (ISSUES[type] || [type])[0];
+const isBalanced = (metadata) => metadata?.sample_mode === "balanced" || metadata?.sampling?.mode === "balanced";
+
+// Steam's own recommendation split for reviews matching the collection filters (balanced mode only).
+function steamPopulation(metadata) {
+  const population = metadata?.sampling?.matching_population;
+  return population?.positive_ratio != null && population.total ? population : null;
+}
+
+// Real Steam reviews can run to thousands of characters; show 4 lines and expand on click/Enter.
+function quoteBlock(text, extra = null, className = "") {
+  const toggle = (event) => event.currentTarget.classList.toggle("expanded");
+  return el("blockquote", {
+    class: `quote ${className}`.trim(),
+    tabindex: "0",
+    title: "눌러서 전체 보기 / 접기",
+    onclick: toggle,
+    onkeydown: (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(event); } },
+  }, el("p", {}, text), extra);
+}
 
 function issueChip(type) {
   const [label, key] = ISSUES[type] || [type, "other"];
@@ -128,7 +156,8 @@ async function searchGames(event) {
   list.replaceChildren(el("li", { class: "muted" }, "검색 중…"));
   try {
     const { games } = await request(`/api/games/search?query=${encodeURIComponent(query)}`);
-    list.replaceChildren(...(games.length ? games.map(gameOption) : [el("li", { class: "muted" }, "검색 결과가 없어요.")]));
+    list.replaceChildren(...(games.length ? games.map(gameOption)
+      : [el("li", { class: "muted" }, "등록된 게임 중에 없어요. Steam 상점 주소의 App ID를 아래에 직접 넣어도 돼요.")]));
   } catch (error) {
     list.replaceChildren(el("li", { class: "error-text" }, error.message, error.detail && ` — ${error.detail}`));
   }
@@ -160,6 +189,7 @@ async function analyze(event) {
     limit: Number($("#limit").value),
     k: Number($("#k").value),
     refresh: $("#refresh").checked,
+    sample_mode: $("#sample-mode").value,
   };
   const button = $("#analyze-btn");
   button.disabled = true;
@@ -188,8 +218,8 @@ function showLoading() {
   $("#output").replaceChildren(
     el("div", { class: "card state" },
       el("div", { class: "spinner", "aria-hidden": "true" }),
-      el("p", { class: "state-title" }, "리뷰를 분석하고 있어요"),
-      el("p", { class: "muted" }, seconds, "초 경과 · 리뷰가 많으면 몇 분 걸릴 수 있어요")));
+      el("p", { class: "state-title" }, "Steam 리뷰를 모아서 분석하고 있어요"),
+      el("p", { class: "muted" }, seconds, "초 경과 · 처음 받는 게임은 리뷰 1,000건에 20초쯤, 많으면 몇 분 걸려요")));
 }
 
 function showError(error) {
@@ -233,14 +263,17 @@ function verdict(ratio) {
   return ["대체로 혹평", "bad"];
 }
 
-function simpleView({ game, summary, priorities, clusters }) {
+function simpleView({ game, summary, priorities, clusters, metadata }) {
   const total = summary.review_count;
-  const complaints = priorities.filter((p) => p.issue_type !== OTHER).slice(0, 3);
+  // One very angry review can top the priority score; the simple view only headlines issues several people raised.
+  const named = priorities.filter((p) => p.issue_type !== OTHER);
+  const complaints = named.filter((p) => p.review_count >= MIN_COMPLAINT_REVIEWS).slice(0, 3);
+  const skipped = named.filter((p) => p.review_count < MIN_COMPLAINT_REVIEWS).length;
   // Clusters are hidden here; only their representative reviews are borrowed when most of the group recommends.
   const praised = clusters.filter((c) => c.positive_ratio >= 0.8).sort((a, b) => b.review_count - a.review_count);
   return [
-    verdictCard(game, summary),
-    complaintSection(complaints, total),
+    isBalanced(metadata) ? balancedVerdictCard(game, summary, metadata) : verdictCard(game, summary),
+    complaintSection(complaints, total, skipped),
     praiseSection(praised),
     el("p", { class: "muted small footnote" },
       `리뷰 ${num(total)}건을 자동으로 분석한 결과라 실제 의견과 다를 수 있어요. 숫자와 근거는 ‘자세히’에서 볼 수 있어요.`),
@@ -263,24 +296,57 @@ function verdictCard(game, summary) {
     ]));
 }
 
-function complaintSection(items, total) {
-  return el("section", { class: "section" },
-    sectionHead("주요 불만 TOP 3", "많이 나오고 평가도 나쁜 문제부터 보여드려요"),
-    items.length
-      ? el("ol", { class: "complaints" }, items.map((p, i) => complaintCard(p, i + 1, total)))
-      : el("p", { class: "card muted" }, "리뷰에서 눈에 띄는 불만을 찾지 못했어요."));
+// In balanced mode the sample is 50:50 by design, so the verdict must come from Steam's own totals.
+function balancedVerdictCard(game, summary, metadata) {
+  const population = steamPopulation(metadata);
+  const [label, tone] = population ? verdict(population.positive_ratio) : [];
+  return el("section", { class: "card verdict" },
+    el("div", { class: "verdict-head" },
+      el("h2", {}, game.name ?? "이 게임"),
+      label && el("span", { class: `badge badge-${tone}` }, label)),
+    population
+      ? [
+        el("p", { class: "verdict-line", title: "Steam API 조건(언어 등)에 맞는 리뷰 기준" },
+          `Steam 리뷰 ${num(population.total)}건 중 `, el("b", {}, pct(population.positive_ratio)), "가 이 게임을 추천했어요."),
+        stackedBar([
+          { label: "추천", value: population.positive, tone: "good" },
+          { label: "비추천", value: population.negative, tone: "bad" },
+        ]),
+      ]
+      : el("p", { class: "verdict-line" }, "이번에는 Steam 전체 추천 비율을 확인하지 못했어요."),
+    el("p", { class: "sample-note" },
+      `불만을 잘 찾으려고 추천·비추천 리뷰를 반반씩(${num(summary.review_count)}건) 골라 분석했어요. 아래 내용은 이 리뷰들 기준이에요.`));
 }
 
-function complaintCard(p, rank, total) {
-  const [label, , icon] = ISSUES[p.issue_type] || [p.issue_type, "other", "💬"];
-  const quote = p.representative_reviews?.[0];
+// A long review that touches many issues is often the most negative one for each of them;
+// show it once and let later complaints use their next representative review.
+function pickQuote(priority, shown) {
+  const reviews = priority.representative_reviews || [];
+  const pick = reviews.find((review) => !shown.has(review.text)) || reviews[0];
+  if (pick) shown.add(pick.text);
+  return pick;
+}
+
+function complaintSection(items, total, skipped) {
+  const shown = new Set();
+  return el("section", { class: "section" },
+    sectionHead(items.length === 3 ? "주요 불만 TOP 3" : "주요 불만", "많이 나오고 평가도 나쁜 문제부터 보여드려요"),
+    items.length
+      ? el("ol", { class: "complaints" }, items.map((p, i) => complaintCard(p, i + 1, total, pickQuote(p, shown))))
+      : el("p", { class: "card muted" }, "리뷰에서 눈에 띄는 불만을 찾지 못했어요."),
+    skipped > 0 && el("p", { class: "muted small" },
+      `리뷰 ${MIN_COMPLAINT_REVIEWS}건 미만에서만 나온 문제 ${skipped}개는 뺐어요. ‘자세히’에서 볼 수 있어요.`));
+}
+
+function complaintCard(p, rank, total, quote) {
+  const [label, , icon] = ISSUES[p.issue_type] || [p.issue_type, "other", "📝"];
   return el("li", { class: "card complaint" },
     el("span", { class: "complaint-icon", "aria-hidden": "true" }, icon),
     el("h3", {}, el("span", { class: "complaint-rank" }, `${rank}위`), label),
     el("p", {},
       `리뷰 ${num(total)}건 중 `, el("b", {}, `${num(p.review_count)}건`), "에서 이 문제를 이야기했고, ",
       "그중 ", el("b", {}, pct(p.negative_ratio)), "가 게임을 비추천했어요."),
-    quote && el("blockquote", {}, el("p", {}, `“${quote.text}”`)));
+    quote && quoteBlock(`“${quote.text}”`));
 }
 
 function praiseSection(clusters) {
@@ -288,7 +354,7 @@ function praiseSection(clusters) {
   if (!quotes.length) return null;
   return el("section", { class: "section" },
     sectionHead("좋게 본 점", "추천이 많은 리뷰 묶음에서 고른 리뷰예요"),
-    el("div", { class: "praise-grid" }, quotes.map((review) => el("blockquote", { class: "praise" }, el("p", {}, `“${review.text}”`)))));
+    el("div", { class: "praise-grid" }, quotes.map((review) => quoteBlock(`“${review.text}”`, null, "praise"))));
 }
 
 // ---------- detail view ----------
@@ -301,7 +367,7 @@ function detailView(result) {
     el("div", { class: "grid-2" }, recommendCard(result), sentimentCard(result)),
     prioritySection(result.priorities),
     clusterSection(result.clusters, result.summary.review_count),
-    warningsSection(result.warnings),
+    warningsSection(isBalanced(result.metadata) ? [BALANCED_NOTE, ...result.warnings] : result.warnings),
     configSection(result.metadata.config),
   ].filter(Boolean);
 }
@@ -311,6 +377,7 @@ function resultHeader({ game, metadata }) {
   const meta = [
     game.app_id != null && `App ID ${game.app_id}`,
     `분석 ${when}`,
+    isBalanced(metadata) ? "표본 추천·비추천 반반" : "표본 최신 리뷰",
     `데이터 ${metadata.data_source}`,
     metadata.cache_used ? "캐시 사용" : "새로 수집",
   ].filter(Boolean).join(" · ");
@@ -324,11 +391,15 @@ function kpi(label, value, sub, tone) {
     sub && el("span", { class: "kpi-sub" }, sub));
 }
 
-function kpis({ summary, sentiment, clustering }, top) {
+function kpis({ summary, sentiment, clustering, metadata }, top) {
   const silhouette = clustering.silhouette_score;
+  const population = steamPopulation(metadata);
   return el("div", { class: "kpis" },
     kpi("분석한 리뷰", `${num(summary.review_count)}건`),
-    kpi("Steam 추천", pct(summary.positive_ratio, 1), `비추천 ${pct(summary.negative_ratio, 1)}`),
+    isBalanced(metadata)
+      ? kpi("Steam 전체 추천", population ? pct(population.positive_ratio, 1) : "-",
+        `표본은 반반으로 맞춤 (${pct(summary.positive_ratio, 1)})`)
+      : kpi("Steam 추천", pct(summary.positive_ratio, 1), `비추천 ${pct(summary.negative_ratio, 1)}`),
     kpi("글 감성 평균", signed(sentiment.average_compound), "-1 부정 ~ +1 긍정"),
     kpi("1순위 개선 과제", top ? issueLabel(top.issue_type) : "없음", top && `점수 ${top.priority_score.toFixed(2)}`, "accent"),
     kpi("군집", `${clustering.formed_clusters}개`,
@@ -350,15 +421,31 @@ function stackedBar(parts) {
   ];
 }
 
-function recommendCard({ summary }) {
+function recommendCard({ summary, metadata }) {
   const n = summary.review_count;
+  const sampleBar = stackedBar([
+    { label: "추천", value: Math.round(summary.positive_ratio * n), tone: "good" },
+    { label: "비추천", value: Math.round(summary.negative_ratio * n), tone: "bad" },
+  ]);
+  if (!isBalanced(metadata)) {
+    return el("section", { class: "card" },
+      el("h3", {}, "Steam 추천 여부"),
+      el("p", { class: "muted small" }, "리뷰 작성자가 직접 고른 추천 / 비추천"),
+      sampleBar);
+  }
+  const population = steamPopulation(metadata);
   return el("section", { class: "card" },
     el("h3", {}, "Steam 추천 여부"),
-    el("p", { class: "muted small" }, "리뷰 작성자가 직접 고른 추천 / 비추천"),
-    stackedBar([
-      { label: "추천", value: Math.round(summary.positive_ratio * n), tone: "good" },
-      { label: "비추천", value: Math.round(summary.negative_ratio * n), tone: "bad" },
-    ]));
+    el("p", { class: "muted small" }, "분석 표본은 추천·비추천을 반반 골라 만든 값이에요"),
+    population && [
+      el("p", { class: "bar-label" }, `Steam 전체 (${num(population.total)}건)`),
+      stackedBar([
+        { label: "추천", value: population.positive, tone: "good" },
+        { label: "비추천", value: population.negative, tone: "bad" },
+      ]),
+    ],
+    el("p", { class: "bar-label" }, `분석 표본 (${num(n)}건)`),
+    sampleBar);
 }
 
 function sentimentCard({ sentiment }) {
@@ -399,7 +486,7 @@ function priorityRow(p, rank) {
         el("div", { class: "priority-main" },
           el("div", { class: "priority-title" },
             issueChip(p.issue_type),
-            isOther && el("span", { class: "muted small" }, "키워드에 걸리지 않은 리뷰 · 참고용")),
+            isOther && el("span", { class: "muted small" }, "불만이지만 정해진 유형에 맞지 않는 리뷰 · 참고용")),
           el("div", { class: "meter" }, el("span", { class: "meter-fill", style: width(p.priority_score) }))),
         el("b", { class: "score" }, p.priority_score.toFixed(2)),
         el("ul", { class: "facts" },
@@ -428,8 +515,7 @@ function reviewQuotes(title, reviews) {
   if (!reviews?.length) return null;
   return el("div", { class: "quotes" },
     title && el("h4", {}, title),
-    reviews.map((review) => el("blockquote", {},
-      el("p", {}, review.text),
+    reviews.map((review) => quoteBlock(review.text,
       review.review_id != null && el("cite", { class: "muted" }, `리뷰 #${review.review_id}`))));
 }
 

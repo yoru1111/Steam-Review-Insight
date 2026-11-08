@@ -38,6 +38,12 @@
         <label class="field detail-only">군집 수 (k)
           <input id="k" type="number" min="2" max="50" value="5" required>
         </label>
+        <label class="field field-wide">리뷰 고르는 방식
+          <select id="sample-mode">
+            <option value="recent">최신 리뷰 그대로</option>
+            <option value="balanced">불만 찾기용 (추천·비추천 반반)</option>
+          </select>
+        </label>
         <label class="check"><input id="refresh" type="checkbox"> 새로 수집</label>
         <button id="analyze-btn" type="submit" class="btn btn-primary">분석 시작</button>
       </form>
