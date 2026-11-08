@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from src.analysis import AnalysisConfig, analyze_reviews
 from src.analysis.exceptions import AnalysisError
@@ -14,6 +16,8 @@ from .data_adapter import (
     create_default_adapter,
 )
 from .schemas import AnalyzeRequest
+
+FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 
 
 def create_app(adapter: ReviewDataAdapter | None = None) -> FastAPI:
@@ -60,6 +64,8 @@ def create_app(adapter: ReviewDataAdapter | None = None) -> FastAPI:
     def analysis_status(job_id: str) -> dict[str, str]:
         raise HTTPException(status_code=501, detail="Background analysis jobs are not implemented; /api/analyze is synchronous")
 
+    # Mounted last so /api/* and /docs keep priority; serves frontend/index.html at "/".
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
     return app
 
 

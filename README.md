@@ -19,6 +19,13 @@ uvicorn backend.main:app --reload
 서버 실행 후 `http://127.0.0.1:8000/docs`에서 API를 확인합니다. 현재 기본 Adapter는
 전처리 팀 모듈이 연결되지 않았으므로 검색과 App ID 분석에 `503`을 반환합니다.
 
+웹 화면은 같은 서버의 `http://127.0.0.1:8000/`에서 열립니다(`frontend/` 정적 파일, 빌드 불필요).
+상단 스위치로 두 가지 보기를 고릅니다. `간단히`는 추천 비율 한 줄 평, 주요 불만 TOP 3, 좋게 본 리뷰만
+쉬운 문장으로 보여주고, `자세히`는 KPI·추천/감성 비교·우선순위 점수 구성·리뷰 군집을 모두 보여줍니다.
+`리뷰 고르는 방식`에서 `sample_mode`(최신 리뷰 / 추천·비추천 반반)를 고르며, 반반 모드에서는 한 줄 평에
+표본 비율 대신 `metadata.sampling.matching_population`의 Steam 전체 추천 비율을 씁니다. `간단히`는 리뷰
+3건 미만에서만 나온 이슈를 TOP 3에서 빼고 `자세히`에서만 보여줍니다.
+
 샘플 DataFrame 분석:
 
 ```bash
@@ -35,7 +42,8 @@ config.clustering.k = 5
 result = analyze_reviews(processed_dataframe, config)
 ```
 
-필수 컬럼은 `review_text`, `review_clean`, `voted_up`입니다. `app_id`, `game_name`,
+필수 컬럼은 `review_text`, `review_clean`, `voted_up`입니다. `voted_up`은 bool 타입이어야 하며
+`"True"`/`"False"` 문자열이면 `InputValidationError`(API `422`)가 발생합니다. `app_id`, `game_name`,
 `review_id`가 있으면 결과 식별자에 사용합니다. 기존 `sentiment`와 `voted_up`은 수정하지 않고
 VADER 결과를 `sentiment_score`, `sentiment_label`로 별도 생성합니다.
 

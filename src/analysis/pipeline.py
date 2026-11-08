@@ -67,6 +67,9 @@ def _validate(df: pd.DataFrame) -> None:
     missing = sorted(REQUIRED_COLUMNS - set(df.columns))
     if missing:
         raise InputValidationError(f"Required columns missing: {', '.join(missing)}")
+    # astype(bool) turns any non-empty string (e.g. "False") into True, so require a real bool column.
+    if not pd.api.types.is_bool_dtype(df["voted_up"]):
+        raise InputValidationError(f"voted_up must be a boolean column, got dtype {df['voted_up'].dtype}")
 
 
 def _native(value: Any) -> Any:
