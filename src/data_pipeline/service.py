@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from uuid import uuid4
 
+from .catalog import SteamCatalog
 from .collector import (
     REVIEW_TYPES, CollectionError, SteamClient, active_run, collect, parse_page, raw_pages,
 )
@@ -54,10 +55,12 @@ def interleave_labels(records):
 
 
 class ReviewPipeline:
-    def __init__(self, root=ROOT, *, catalog_path=None, client_factory=SteamClient):
+    def __init__(self, root=ROOT, *, catalog_path=None, client_factory=SteamClient,
+                 steam_catalog=None):
         self.root = Path(root).resolve()
         self.catalog_path = Path(catalog_path) if catalog_path is not None else self.root / "data/catalog.local.json"
         self.client_factory = client_factory
+        self.steam_catalog = steam_catalog or SteamCatalog(self.root / "data/catalog.steam.json")
 
     def catalog(self):
         games = {}
@@ -77,10 +80,15 @@ class ReviewPipeline:
         query = query.strip().casefold()
         if not query:
             return []
-        matches = [{"app_id": key, "name": name} for key, name in self.catalog().items()
+        games = self.catalog()
+        games.update(self.steam_catalog.games())
+        matches = [{"app_id": key, "name": name} for key, name in games.items()
                    if query in name.casefold()]
-        return sorted(matches, key=lambda game: (game["name"].casefold() != query,
-                                                 game["name"].casefold(), game["app_id"]))
+        return sorted(matches, key=lambda game: (
+            game["name"].casefold() != query,
+            not game["name"].casefold().startswith(query),
+            game["name"].casefold(), game["app_id"],
+        ))
 
     def _raw(self, game):
         return self.root / "data/raw/steam" / str(require_app_id(game))

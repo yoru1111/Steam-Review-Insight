@@ -122,11 +122,11 @@ API 응답은 페이지 단위로, 게임별 정제 결과는 스냅샷 단위�
 
 ## UI와 시스템 어댑터
 
-`src.data_pipeline`에서 아래 함수와 `ReviewPipeline`을 가져올 수 있다. 기본 로컬 카탈로그는
-[Portal](https://store.steampowered.com/app/400/), [Portal 2](https://store.steampowered.com/app/620/),
-[Cyberpunk 2077](https://store.steampowered.com/app/1091500/)의 App ID를 포함한다.
-`data/catalog.local.json`에 검증된 게임을 `{"620": "Portal 2"}`와 같은 형태로 추가하면
-네트워크와 키 없이 검색할 수 있다. 전체 Steam 목록이 필요할 때는 팀에서 카탈로그를 확장한다.
+`src.data_pipeline`에서 아래 함수와 `ReviewPipeline`을 가져올 수 있다. 게임 이름 검색은
+`STEAM_WEB_API_KEY`가 있으면 Steam의 페이지네이션된 `IStoreService/GetAppList/v1` 게임 목록을
+내려받아 `data/catalog.steam.json`에 24시간 캐시한다. 갱신 실패 시 기존 캐시를 계속 사용하고,
+캐시도 없으면 `config/games.json`과 선택적인 `data/catalog.local.json`만 검색한다. 실패 후
+한 시간 동안은 원격 갱신을 재시도하지 않는다. 두 캐시 파일은 Git에서 제외된다.
 
 | 함수 | 입력 → 반환 | 동작 및 오류 |
 | --- | --- | --- |

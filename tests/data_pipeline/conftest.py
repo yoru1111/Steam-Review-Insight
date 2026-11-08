@@ -41,6 +41,11 @@ class Responses:
         return SteamClient(opener=self.open, sleep=self.sleeps.append, delay=0.25, **kwargs)
 
 
+class EmptyCatalog:
+    def games(self):
+        return {}
+
+
 @pytest.fixture
 def transport():
     return Responses()
@@ -48,4 +53,4 @@ def transport():
 
 @pytest.fixture
 def pipeline(tmp_path, transport):
-    return ReviewPipeline(tmp_path, client_factory=transport.client)
+    return ReviewPipeline(tmp_path, client_factory=transport.client, steam_catalog=EmptyCatalog())

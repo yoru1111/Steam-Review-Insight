@@ -19,6 +19,7 @@ htmlcov/
 /data/raw/
 /data/processed/
 /data/catalog.local.json
+/data/catalog.steam.json
 /reports/
 *.csv
 !tests/data_pipeline/fixtures/*.csv

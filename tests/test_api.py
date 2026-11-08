@@ -5,6 +5,11 @@ from backend.main import app, create_app
 from src.data_pipeline import ReviewPipeline
 
 
+class EmptyCatalog:
+    def games(self):
+        return {}
+
+
 class MockAdapter:
     def __init__(self, frame):
         self.frame = frame
@@ -67,7 +72,7 @@ def test_frontend_served_without_shadowing_api():
 
 def test_default_app_uses_data_pipeline_for_game_search():
     assert create_default_adapter().__class__ is ReviewPipeline
-    with TestClient(app) as client:
+    with TestClient(create_app(ReviewPipeline(steam_catalog=EmptyCatalog()))) as client:
         response = client.get("/api/games/search", params={"query": "portal"})
         assert response.status_code == 200
         assert response.json()["games"] == [
@@ -76,10 +81,25 @@ def test_default_app_uses_data_pipeline_for_game_search():
         ]
 
 
+def test_game_search_finds_integration_examples():
+    expected = {
+        "Elden Ring": 1245620,
+        "Terraria": 105600,
+        "Stardew Valley": 413150,
+        "Portal": 400,
+        "Cyberpunk 2077": 1091500,
+    }
+    with TestClient(create_app(ReviewPipeline(steam_catalog=EmptyCatalog()))) as client:
+        for query, app_id in expected.items():
+            response = client.get("/api/games/search", params={"query": query})
+            assert response.status_code == 200
+            assert response.json()["games"][0]["app_id"] == app_id
+
+
 def test_preprocessed_reviews_flow_through_fastapi_analysis(tmp_path, reviews_df):
     source = tmp_path / "reviews.csv"
     reviews_df.assign(app_id=620, game_name="Portal 2").to_csv(source, index=False)
-    pipeline = ReviewPipeline(tmp_path)
+    pipeline = ReviewPipeline(tmp_path, steam_catalog=EmptyCatalog())
     result = pipeline.preprocess_csv(source)
     assert result["clean_rows"] == len(reviews_df)
 
