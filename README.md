@@ -8,7 +8,7 @@
 Python 3.12 기준입니다.
 
 ```bash
-cd /home/jimmy099/steam-review-insight
+cd /home/steam-review-insight
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
