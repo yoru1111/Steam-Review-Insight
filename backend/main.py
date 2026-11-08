@@ -9,7 +9,12 @@ from fastapi.staticfiles import StaticFiles
 from src.analysis import AnalysisConfig, analyze_reviews
 from src.analysis.exceptions import AnalysisError
 
-from .data_adapter import DataPipelineUnavailable, ReviewDataAdapter, UnavailableDataAdapter
+from .data_adapter import (
+    DataPipelineUnavailable,
+    ReviewDataAdapter,
+    UnavailableDataAdapter,
+    create_default_adapter,
+)
 from .schemas import AnalyzeRequest
 
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
@@ -42,7 +47,7 @@ def create_app(adapter: ReviewDataAdapter | None = None) -> FastAPI:
     def analyze(payload: AnalyzeRequest, request: Request) -> dict[str, Any]:
         try:
             frame, metadata = request.app.state.data_adapter.get_reviews(
-                payload.app_id, payload.limit, payload.refresh
+                payload.app_id, payload.limit, payload.refresh, payload.sample_mode
             )
             config = AnalysisConfig()
             config.clustering.k = payload.k
@@ -64,4 +69,4 @@ def create_app(adapter: ReviewDataAdapter | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+app = create_app(create_default_adapter())
