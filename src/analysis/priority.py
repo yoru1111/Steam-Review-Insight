@@ -7,7 +7,7 @@ from .issue_detection import group_by_issue
 
 
 def calculate_priorities(df: pd.DataFrame, weights: PriorityWeights | None = None,
-                         representative_count: int = 3) -> list[dict[str, Any]]:
+                         representative_count: int = 3, min_reviews: int = 3) -> list[dict[str, Any]]:
     weights = weights or PriorityWeights()
     weights.validate()
     total = len(df)
@@ -25,13 +25,15 @@ def calculate_priorities(df: pd.DataFrame, weights: PriorityWeights | None = Non
             "issue_type": issue, "review_count": int(count), "review_ratio": float(frequency),
             "negative_ratio": negative_ratio, "average_sentiment_score": float(group["sentiment_score"].mean()),
             "negative_sentiment_severity": negative_severity, "priority_score": float(min(1.0, max(0.0, score))),
+            "sufficient_evidence": bool(count >= min_reviews),
             "representative_reviews": examples,
             "score_basis": {"frequency_score": float(frequency), "negative_review_ratio": negative_ratio,
                             "negative_sentiment_severity": negative_severity,
                             "weights": {"frequency": weights.frequency, "negative_ratio": weights.negative_ratio,
                                         "negative_severity": weights.negative_severity}},
         })
-    return sorted(priorities, key=lambda item: item["priority_score"], reverse=True)
+    # A few very negative reviews can top the score, so thin-evidence issues always rank after well-supported ones.
+    return sorted(priorities, key=lambda item: (item["sufficient_evidence"], item["priority_score"]), reverse=True)
 
 
 def _native(value: Any) -> Any:

@@ -39,14 +39,15 @@
           <input id="k" type="number" min="2" max="50" value="5" required>
         </label>
         <label class="field field-wide">리뷰 고르는 방식
-          <select id="sample-mode">
-            <option value="recent">최신 리뷰 그대로</option>
-            <option value="balanced">불만 찾기용 (추천·비추천 반반)</option>
+          <select id="sample-mode" aria-describedby="sample-mode-help">
+            <option value="recent">최신 리뷰 — 전체 반응 보기</option>
+            <option value="balanced">추천·비추천 반반 — 불만 찾기</option>
           </select>
         </label>
         <label class="check"><input id="refresh" type="checkbox"> 새로 수집</label>
         <button id="analyze-btn" type="submit" class="btn btn-primary">분석 시작</button>
       </form>
+      <p id="sample-mode-help" class="muted small"></p>
       <p id="selected-game" class="selected" aria-live="polite"></p>
     </section>
 

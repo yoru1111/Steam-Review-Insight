@@ -24,7 +24,9 @@
 
 각 cluster는 번호, 개수, 상위 키워드, 참고 이슈 유형, Steam 추천/비추천 비율, VADER 통계와
 대표 리뷰를 포함합니다. 각 priority는 이슈 유형, 개수, 전체 대비 비율, 부정 비율, 평균 compound,
-부정 강도, 점수, 대표 리뷰와 `score_basis`를 포함합니다.
+부정 강도, 점수, 대표 리뷰와 `score_basis`를 포함합니다. 언급 리뷰 수가 `metadata.config.min_priority_reviews`
+(기본 3) 미만인 이슈는 `sufficient_evidence: false`이며, 점수와 관계없이 근거가 충분한 이슈 뒤에 정렬됩니다.
+UI는 이 이슈를 순위에서 빼고 '근거 리뷰 부족'으로 따로 보여줍니다.
 
 균형 모드 응답의 `metadata.sampling`에는 실제 API 조건의 모집단 분포와 분석 표본 분포가 별도로
 포함됩니다. `selected_ratios`의 50:50은 분석 설계이며 Steam 전체 평가 비율이 아닙니다.

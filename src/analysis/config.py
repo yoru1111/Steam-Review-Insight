@@ -44,6 +44,8 @@ class AnalysisConfig:
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
     sentiment: SentimentConfig = field(default_factory=SentimentConfig)
     priority_weights: PriorityWeights = field(default_factory=PriorityWeights)
+    # Issues raised by fewer reviews than this are flagged as thin evidence and ranked after the rest.
+    min_priority_reviews: int = 3
 
     def __post_init__(self) -> None:
         self.priority_weights.validate()

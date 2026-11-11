@@ -21,7 +21,6 @@ const ISSUES = {
 };
 
 const MODE_KEY = "sri-view-mode";
-const MIN_COMPLAINT_REVIEWS = 3;
 
 const ERROR_TITLES = {
   422: "입력값이나 리뷰 데이터를 확인해 주세요",
@@ -31,7 +30,13 @@ const ERROR_TITLES = {
   503: "리뷰 데이터를 가져올 수 없어요",
 };
 
-const BALANCED_NOTE = "추천·비추천 리뷰를 반반씩 골라 분석했어요. 표본의 추천 비율은 일부러 맞춘 값이라 Steam 전체 비율이 아니에요.";
+// Shown under the sample-mode select so the user knows how each option picks reviews and what it is for.
+const SAMPLE_MODE_HELP = {
+  recent: "최신 리뷰: Steam에 최근 올라온 리뷰를 순서대로 가져와요. 추천 비율이 실제와 같아서 전체 반응을 볼 때 좋아요. 호평이 많은 게임은 불만 리뷰가 적게 모일 수 있어요.",
+  balanced: "추천·비추천 반반: 최근 추천 리뷰와 최근 비추천 리뷰를 같은 수만큼 따로 가져와요. 호평이 많은 게임에서도 불만 리뷰가 충분히 모여 개선점을 찾을 때 좋아요. 표본의 추천 비율은 일부러 50%로 맞춘 값이라, 전체 평가는 Steam 집계로 따로 보여드려요.",
+};
+
+const BALANCED_NOTE ="추천·비추천 리뷰를 반반씩 골라 분석했어요. 표본의 추천 비율은 일부러 맞춘 값이라 Steam 전체 비율이 아니에요.";
 
 const WARNINGS = [
   [/^Silhouette score is very low/, () => "군집 분리도가 매우 낮아요. 묶음 사이 경계가 약할 수 있어요."],
@@ -265,15 +270,15 @@ function verdict(ratio) {
 
 function simpleView({ game, summary, priorities, clusters, metadata }) {
   const total = summary.review_count;
-  // One very angry review can top the priority score; the simple view only headlines issues several people raised.
+  // The backend flags issues raised by too few reviews (sufficient_evidence); both views leave them out of the ranking.
   const named = priorities.filter((p) => p.issue_type !== OTHER);
-  const complaints = named.filter((p) => p.review_count >= MIN_COMPLAINT_REVIEWS).slice(0, 3);
-  const skipped = named.filter((p) => p.review_count < MIN_COMPLAINT_REVIEWS).length;
+  const complaints = named.filter((p) => p.sufficient_evidence).slice(0, 3);
+  const skipped = named.filter((p) => !p.sufficient_evidence).length;
   // Clusters are hidden here; only their representative reviews are borrowed when most of the group recommends.
   const praised = clusters.filter((c) => c.positive_ratio >= 0.8).sort((a, b) => b.review_count - a.review_count);
   return [
     isBalanced(metadata) ? balancedVerdictCard(game, summary, metadata) : verdictCard(game, summary),
-    complaintSection(complaints, total, skipped),
+    complaintSection(complaints, total, skipped, metadata.config.min_priority_reviews),
     praiseSection(praised),
     el("p", { class: "muted small footnote" },
       `리뷰 ${num(total)}건을 자동으로 분석한 결과라 실제 의견과 다를 수 있어요. 숫자와 근거는 ‘자세히’에서 볼 수 있어요.`),
@@ -327,7 +332,7 @@ function pickQuote(priority, shown) {
   return pick;
 }
 
-function complaintSection(items, total, skipped) {
+function complaintSection(items, total, skipped, minReviews) {
   const shown = new Set();
   return el("section", { class: "section" },
     sectionHead(items.length === 3 ? "주요 불만 TOP 3" : "주요 불만", "많이 나오고 평가도 나쁜 문제부터 보여드려요"),
@@ -335,7 +340,7 @@ function complaintSection(items, total, skipped) {
       ? el("ol", { class: "complaints" }, items.map((p, i) => complaintCard(p, i + 1, total, pickQuote(p, shown))))
       : el("p", { class: "card muted" }, "리뷰에서 눈에 띄는 불만을 찾지 못했어요."),
     skipped > 0 && el("p", { class: "muted small" },
-      `리뷰 ${MIN_COMPLAINT_REVIEWS}건 미만에서만 나온 문제 ${skipped}개는 뺐어요. ‘자세히’에서 볼 수 있어요.`));
+      `리뷰 ${minReviews}건 미만에서만 나온 문제 ${skipped}개는 ‘근거 리뷰 부족’으로 따로 모았어요. ‘자세히’에서 볼 수 있어요.`));
 }
 
 function complaintCard(p, rank, total, quote) {
@@ -360,12 +365,14 @@ function praiseSection(clusters) {
 // ---------- detail view ----------
 
 function detailView(result) {
-  const top = result.priorities.find((p) => p.issue_type !== OTHER);
+  const top = result.priorities.find((p) => p.issue_type !== OTHER && p.sufficient_evidence);
+  const minReviews = result.metadata.config.min_priority_reviews;
   return [
     resultHeader(result),
     kpis(result, top),
     el("div", { class: "grid-2" }, recommendCard(result), sentimentCard(result)),
-    prioritySection(result.priorities),
+    prioritySection(result.priorities.filter((p) => p.sufficient_evidence), minReviews),
+    thinEvidenceSection(result.priorities.filter((p) => !p.sufficient_evidence), minReviews),
     clusterSection(result.clusters, result.summary.review_count),
     warningsSection(isBalanced(result.metadata) ? [BALANCED_NOTE, ...result.warnings] : result.warnings),
     configSection(result.metadata.config),
@@ -401,7 +408,8 @@ function kpis({ summary, sentiment, clustering, metadata }, top) {
         `표본은 반반으로 맞춤 (${pct(summary.positive_ratio, 1)})`)
       : kpi("Steam 추천", pct(summary.positive_ratio, 1), `비추천 ${pct(summary.negative_ratio, 1)}`),
     kpi("글 감성 평균", signed(sentiment.average_compound), "-1 부정 ~ +1 긍정"),
-    kpi("1순위 개선 과제", top ? issueLabel(top.issue_type) : "없음", top && `점수 ${top.priority_score.toFixed(2)}`, "accent"),
+    kpi("1순위 개선 과제", top ? issueLabel(top.issue_type) : "없음",
+      top && `점수 ${top.priority_score.toFixed(2)} · 리뷰 ${num(top.review_count)}건`, "accent"),
     kpi("군집", `${clustering.formed_clusters}개`,
       `분리도 ${silhouette == null ? "-" : silhouette.toFixed(2)} · ${separation(silhouette)}`),
   );
@@ -463,30 +471,40 @@ function sectionHead(title, note) {
   return el("div", { class: "section-head" }, el("h2", {}, title), note && el("p", { class: "muted small" }, note));
 }
 
-function prioritySection(items) {
+function prioritySection(items, minReviews) {
   const weights = items[0]?.score_basis.weights;
   // Unclassified reviews are not actionable, so they always go last.
   const ordered = [...items.filter((p) => p.issue_type !== OTHER), ...items.filter((p) => p.issue_type === OTHER)];
   let rank = 0;
   return el("section", { class: "section" },
-    sectionHead("개선 우선순위", weights &&
-      `점수 = ${weights.frequency} × 언급 빈도 + ${weights.negative_ratio} × 비추천 비율 + ${weights.negative_severity} × 부정 강도`),
+    sectionHead("개선 우선순위", [
+      weights && `점수 = ${weights.frequency} × 언급 빈도 + ${weights.negative_ratio} × 비추천 비율 + ${weights.negative_severity} × 부정 강도`,
+      `리뷰 ${minReviews}건 이상에서 나온 문제만 순위를 매겨요`,
+    ].filter(Boolean).join(" · ")),
     ordered.length
       ? el("ol", { class: "priority-list" }, ordered.map((p) => priorityRow(p, p.issue_type === OTHER ? null : ++rank)))
-      : el("p", { class: "muted" }, "우선순위 결과가 없어요."));
+      : el("p", { class: "muted" }, "순위를 매길 만큼 리뷰가 모인 문제가 없어요."));
+}
+
+// Issues with too few reviews keep their score for reference but stay out of the ranking above.
+function thinEvidenceSection(items, minReviews) {
+  if (!items.length) return null;
+  return el("section", { class: "section" },
+    sectionHead("근거 리뷰 부족", `리뷰 ${minReviews}건 미만에서만 나온 문제라 점수가 높아도 순위에서 뺐어요 · 참고용`),
+    el("ol", { class: "priority-list" }, items.map((p) => priorityRow(p, null))));
 }
 
 function priorityRow(p, rank) {
   const basis = p.score_basis;
-  const isOther = rank == null;
-  return el("li", { class: isOther ? "priority card is-other" : "priority card" },
+  const unranked = rank == null;
+  return el("li", { class: unranked ? "priority card is-other" : "priority card" },
     el("details", {},
       el("summary", {},
-        el("span", { class: "rank" }, isOther ? "–" : rank),
+        el("span", { class: "rank" }, unranked ? "–" : rank),
         el("div", { class: "priority-main" },
           el("div", { class: "priority-title" },
             issueChip(p.issue_type),
-            isOther && el("span", { class: "muted small" }, "불만이지만 정해진 유형에 맞지 않는 리뷰 · 참고용")),
+            p.issue_type === OTHER && el("span", { class: "muted small" }, "불만이지만 정해진 유형에 맞지 않는 리뷰 · 참고용")),
           el("div", { class: "meter" }, el("span", { class: "meter-fill", style: width(p.priority_score) }))),
         el("b", { class: "score" }, p.priority_score.toFixed(2)),
         el("ul", { class: "facts" },
@@ -565,6 +583,9 @@ function configSection(config) {
 $("#search-form").addEventListener("submit", searchGames);
 $("#analyze-form").addEventListener("submit", analyze);
 $("#app-id").addEventListener("input", () => { $("#selected-game").textContent = ""; });
+const showSampleModeHelp = () => { $("#sample-mode-help").textContent = SAMPLE_MODE_HELP[$("#sample-mode").value]; };
+$("#sample-mode").addEventListener("change", showSampleModeHelp);
+showSampleModeHelp();
 for (const button of document.querySelectorAll(".mode-switch button")) {
   button.addEventListener("click", () => setMode(button.dataset.mode));
 }

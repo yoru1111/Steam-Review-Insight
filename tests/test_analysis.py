@@ -192,8 +192,26 @@ def test_priorities_range_and_order(reviews_df):
     priorities = calculate_priorities(add_issue_types(frame))
     scores = [p["priority_score"] for p in priorities]
     assert all(0 <= score <= 1 for score in scores)
-    assert scores == sorted(scores, reverse=True)
+    keys = [(p["sufficient_evidence"], p["priority_score"]) for p in priorities]
+    assert keys == sorted(keys, reverse=True)
     assert all("score_basis" in item for item in priorities)
+
+
+def test_thin_evidence_issues_rank_after_well_supported_ones():
+    rows = [("The game is unplayable, it crashes on launch. Awful, garbage, hate it.", False)]
+    rows += [("Poor optimization and some lag in the city.", True)] * 3
+    frame = pd.DataFrame([
+        {"review_id": i, "review_text": text, "review_clean": text.lower(), "voted_up": voted}
+        for i, (text, voted) in enumerate(rows, start=1)
+    ])
+    priorities = calculate_priorities(add_issue_types(analyze_sentiment(frame)), min_reviews=3)
+    by_type = {item["issue_type"]: item for item in priorities}
+
+    thin, solid = by_type["Bugs / Crashes"], by_type["Performance / Optimization"]
+    assert thin["review_count"] == 1 and not thin["sufficient_evidence"]
+    assert solid["review_count"] == 3 and solid["sufficient_evidence"]
+    assert thin["priority_score"] > solid["priority_score"]
+    assert priorities.index(solid) < priorities.index(thin)
 
 
 def test_new_issue_categories_flow_to_priorities_with_representative_reviews():
