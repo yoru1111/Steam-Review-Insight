@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import Counter, defaultdict
 import re
 from typing import Any
 
@@ -50,7 +50,8 @@ NEGATED_QUALITY = re.compile(
     r"\b(?:is|are|was|were|feels?|seems?|looks?|does|do)n['’]?t\b(?:\W+\w+){0,2}\W+"
     r"(?:bad|poor|weak|rushed|confusing|cluttered|limited|repetitive|disappointing|overpriced|expensive|too\s+long)\b"
     r"|\b(?:is|are|was|were|feels?|seems?|looks?)\s+not\b(?:\W+\w+){0,2}\W+"
-    r"(?:bad|poor|weak|rushed|confusing|cluttered|limited|repetitive|disappointing|overpriced|expensive|too\s+long)\b",
+    r"(?:bad|poor|weak|rushed|confusing|cluttered|limited|repetitive|disappointing|overpriced|expensive|too\s+long)\b"
+    r"|\bnot\s+bad\b",
     re.IGNORECASE,
 )
 PRAISE = re.compile(
@@ -73,6 +74,54 @@ PROGRESS_BLOCKED = re.compile(
     r"|\b(?:stuck|softlock(?:ed)?|progression\s+block(?:ed|er)?)\b",
     re.IGNORECASE,
 )
+
+# These signals establish that an otherwise-unclassified review is a complaint. They do not
+# assign a category by themselves; SECONDARY_PATTERNS still requires explicit issue context.
+SECONDARY_COMPLAINT = re.compile(
+    r"\b(?:cheaters?|hackers?|unfair|latency|ping\s+spikes?|rubber\s*band(?:ing)?|"
+    r"corrupt(?:ed|ing|ion)?\s+(?:save|data)|save\s+(?:file\s+)?corrupt(?:ed|ion)?)\b",
+    re.IGNORECASE,
+)
+NEGATED_SECONDARY = re.compile(
+    r"\b(?:no|never|without)\b(?:\W+\w+){0,4}\W+"
+    r"(?:cheaters?|hackers?|latency|high\s+ping|ping\s+spikes?|rubber\s*band(?:ing)?|unfair\s+matchmaking)\b"
+    r"|\bmatchmaking\s+(?:is|feels?|seems?)\s+not\s+(?:unfair|unbalanced|broken|bad)\b"
+    r"|\b(?:cheaters?|hackers?|latency|ping\s+spikes?|rubber\s*band(?:ing)?)\b"
+    r"(?:\W+\w+){0,3}\W+\b(?:gone|fixed|resolved)\b",
+    re.IGNORECASE,
+)
+
+SECONDARY_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "Gameplay": (
+        re.compile(
+            r"\b(?:(?:too\s+many|many|constant|full\s+of|plagued\s+by|riddled\s+with)\s+"
+            r"(?:cheaters?|hackers?)|(?:cheaters?|hackers?)(?:\W+\w+){0,4}\W+"
+            r"(?:ruin|ruins|ruined|destroy|destroys|plague)\w*)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    "Game Balance": (
+        re.compile(
+            r"\b(?:(?:unfair|unbalanced|broken|terrible|awful|bad)\s+matchmaking|"
+            r"matchmaking\s+(?:is|feels?|seems?)\s+(?:unfair|unbalanced|broken|terrible|awful|bad))\b",
+            re.IGNORECASE,
+        ),
+    ),
+    "Performance / Optimization": (
+        re.compile(
+            r"\b(?:high\s+ping|ping\s+spikes?|latency\s+(?:issues?|problems?|spikes?)|"
+            r"rubber\s*band(?:ing)?)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    "Bugs / Crashes": (
+        re.compile(
+            r"\b(?:corrupt(?:ed|ing|ion)?\s+(?:save|save\s+file|data)|"
+            r"(?:save|save\s+file|data)\s+(?:is\s+)?corrupt(?:ed|ing|ion)?)\b",
+            re.IGNORECASE,
+        ),
+    ),
+}
 
 STRONG_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
     "Bugs / Crashes": (
@@ -166,12 +215,20 @@ def _clauses(text: str) -> list[str]:
     return [clause.strip() for clause in CONTRAST_OR_BOUNDARY.split(str(text)) if clause.strip()]
 
 
-def _clause_result(clause: str) -> tuple[bool, list[str]]:
+def _effective_clause(clause: str) -> str:
     effective = NEGATED_PROBLEM.sub(" ", clause)
     effective = RESOLVED_PROBLEM.sub(" ", effective)
     effective = NEGATED_QUALITY.sub(" ", effective)
+    return NEGATED_SECONDARY.sub(" ", effective)
+
+
+def _clause_result(clause: str) -> tuple[bool, list[str]]:
+    effective = _effective_clause(clause)
     tokens = set(re.findall(r"[a-z]+", effective.lower()))
-    has_problem = bool(PROBLEM.search(effective) or PROGRESS_BLOCKED.search(effective))
+    has_problem = bool(
+        PROBLEM.search(effective) or PROGRESS_BLOCKED.search(effective)
+        or SECONDARY_COMPLAINT.search(effective)
+    )
     praised = bool(PRAISE.search(effective))
     issues: list[str] = []
 
@@ -196,7 +253,7 @@ def detect_complaint(text: str) -> bool:
     return any(_clause_result(clause)[0] for clause in _clauses(text))
 
 
-def classify_text(text: str) -> list[str]:
+def _primary_classify(text: str) -> list[str]:
     complaint = False
     matches: list[str] = []
     for clause in _clauses(text):
@@ -208,6 +265,25 @@ def classify_text(text: str) -> list[str]:
     return matches or (["Other / Unclassified"] if complaint else [])
 
 
+def classify_other_complaint(text: str) -> list[str]:
+    """Refine a first-pass Other result with conservative existing-category patterns."""
+    matches: list[str] = []
+    for clause in _clauses(text):
+        effective = _effective_clause(clause)
+        for issue, patterns in SECONDARY_PATTERNS.items():
+            if any(pattern.search(effective) for pattern in patterns) and issue not in matches:
+                matches.append(issue)
+    return matches
+
+
+def classify_text(text: str) -> list[str]:
+    primary = _primary_classify(text)
+    if primary != ["Other / Unclassified"]:
+        return primary
+    secondary = classify_other_complaint(text)
+    return secondary or primary
+
+
 def add_issue_types(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
     source = result["review_clean"].fillna("").astype(str)
@@ -216,11 +292,55 @@ def add_issue_types(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def annotate_cluster_types(clusters: list[dict[str, Any]]) -> None:
+def annotate_cluster_types(clusters: list[dict[str, Any]], reviews: pd.DataFrame | None = None) -> None:
+    """Add legacy keyword labels and, when available, review-level cluster profiles.
+
+    Per-issue ratios use complaint reviews as their denominator. A multi-label review
+    therefore contributes once to each matching issue, so those ratios need not sum
+    to 100 percent.
+    """
     for cluster in clusters:
         scores = {issue: len(set(cluster["keywords"]) & terms) for issue, terms in ISSUE_KEYWORDS.items()}
         best = max(scores, key=scores.get)
         cluster["issue_type"] = best if scores[best] else "Other / Unclassified"
+
+        if reviews is None:
+            continue
+
+        members = reviews.loc[reviews["cluster_id"] == cluster["cluster_id"]]
+        complaint_mask = members["is_complaint"].astype(bool)
+        complaint_reviews = members.loc[complaint_mask]
+        complaint_count = int(complaint_mask.sum())
+        review_count = int(len(members))
+        issue_counts: Counter[str] = Counter()
+        for issue_types in complaint_reviews["issue_types"]:
+            # Count review presence, not label occurrences within a review.
+            issue_counts.update(set(issue_types))
+
+        cluster["complaint_review_count"] = complaint_count
+        cluster["complaint_ratio"] = complaint_count / review_count if review_count else 0.0
+        cluster["issue_review_counts"] = dict(issue_counts)
+        cluster["issue_review_ratios"] = {
+            issue: count / complaint_count for issue, count in issue_counts.items()
+        } if complaint_count else {}
+
+        non_complaint_count = review_count - complaint_count
+        if non_complaint_count > complaint_count:
+            cluster["label_kind"] = "general"
+            cluster["dominant_issue_type"] = None
+            continue
+
+        ranked = issue_counts.most_common()
+        top_issue, top_count = ranked[0] if ranked else (None, 0)
+        second_count = ranked[1][1] if len(ranked) > 1 else 0
+        has_strict_issue_majority = top_count * 2 > complaint_count
+        has_single_leader = top_count > second_count
+        if complaint_count > non_complaint_count and has_strict_issue_majority and has_single_leader:
+            cluster["dominant_issue_type"] = top_issue
+            cluster["label_kind"] = "other" if top_issue == "Other / Unclassified" else "issue"
+        else:
+            cluster["label_kind"] = "mixed"
+            cluster["dominant_issue_type"] = None
 
 
 def group_by_issue(df: pd.DataFrame) -> dict[str, list[int]]:

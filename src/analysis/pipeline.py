@@ -26,7 +26,7 @@ def analyze_reviews(df: pd.DataFrame, config: AnalysisConfig | None = None,
     working["cluster_id"] = labels
     working = add_issue_types(working)
     clusters = summarize_clusters(working, vectors, vectorizer, model, config.clustering)
-    annotate_cluster_types(clusters)
+    annotate_cluster_types(clusters, working)
     priorities = calculate_priorities(working, config.priority_weights, config.clustering.representative_reviews,
                                       config.min_priority_reviews)
 

@@ -94,6 +94,24 @@ function issueChip(type) {
   return el("span", { class: `chip chip-${key}`, title: type }, label);
 }
 
+function clusterChip(cluster) {
+  if (cluster.label_kind === "general") {
+    return el("span", { class: "chip", style: "--chip:var(--neutral)" }, "일반 리뷰 중심");
+  }
+  if (cluster.label_kind === "mixed") {
+    return el("span", { class: "chip chip-other" }, "혼합·유형 미분류");
+  }
+  if (cluster.label_kind === "other") {
+    return el("span", { class: "chip chip-other" }, "기타 불만 중심");
+  }
+  if (cluster.label_kind === "issue" && cluster.dominant_issue_type) {
+    const [label, key] = ISSUES[cluster.dominant_issue_type] || [cluster.dominant_issue_type, "other"];
+    return el("span", { class: `chip chip-${key}`, title: cluster.dominant_issue_type }, `${label} 중심`);
+  }
+  // Backward compatibility for responses produced before cluster profiles existed.
+  return issueChip(cluster.issue_type);
+}
+
 function separation(score) {
   if (score == null) return "계산 불가";
   if (score < 0.05) return "약함";
@@ -540,7 +558,7 @@ function reviewQuotes(title, reviews) {
 function clusterSection(clusters, total) {
   const ordered = [...clusters].sort((a, b) => b.review_count - a.review_count);
   return el("section", { class: "section" },
-    sectionHead("리뷰 군집", "비슷한 단어를 쓴 리뷰끼리 자동으로 묶은 결과 · 유형 라벨은 키워드 기준 참고값"),
+    sectionHead("리뷰 군집", "군집 라벨은 군집 전체의 대표 성격이에요. 개별 리뷰의 불만 유형은 별도이며, 한 리뷰에 여러 유형이 붙을 수 있어요."),
     el("div", { class: "cluster-grid" }, ordered.map((c) => clusterCard(c, total))));
 }
 
@@ -548,7 +566,7 @@ function clusterCard(c, total) {
   return el("article", { class: "card cluster" },
     el("header", { class: "cluster-head" },
       el("h3", {}, `군집 ${c.cluster_id + 1}`),
-      issueChip(c.issue_type),
+      clusterChip(c),
       el("span", { class: "muted small push" }, `${num(c.review_count)}건 · ${pct(c.review_count / total)}`)),
     el("div", { class: "tags" }, c.keywords.map((keyword) => el("span", { class: "tag" }, keyword))),
     el("div", { class: "cluster-stats" },
@@ -559,7 +577,10 @@ function clusterCard(c, total) {
           el("span", { class: "seg-good", style: `flex-grow:${c.positive_ratio}` }),
           el("span", { class: "seg-bad", style: `flex-grow:${c.negative_ratio}` }))),
       el("div", {}, el("span", { class: "muted small" }, "글 감성 평균"), el("b", {}, signed(c.average_sentiment_score))),
-      el("div", {}, el("span", { class: "muted small" }, "부정적인 글"), el("b", {}, pct(c.negative_sentiment_ratio)))),
+      el("div", {}, el("span", { class: "muted small" }, "부정적인 글"), el("b", {}, pct(c.negative_sentiment_ratio))),
+      c.complaint_ratio != null && el("div", {},
+        el("span", { class: "muted small" }, "불만 탐지 리뷰"),
+        el("b", {}, `${num(c.complaint_review_count)}건 · ${pct(c.complaint_ratio)}`))),
     el("details", { class: "cluster-reviews" },
       el("summary", {}, `대표 리뷰 ${c.representative_reviews.length}개`),
       reviewQuotes(null, c.representative_reviews)));

@@ -6,7 +6,8 @@ import pytest
 from src.analysis.clustering import cluster_reviews
 from src.analysis.config import AnalysisConfig, ClusteringConfig, PriorityWeights, TfidfConfig
 from src.analysis.exceptions import ClusteringError, EmptyVocabularyError, InputValidationError
-from src.analysis.issue_detection import add_issue_types, classify_text, detect_complaint
+import src.analysis.issue_detection as issue_detection
+from src.analysis.issue_detection import add_issue_types, annotate_cluster_types, classify_text, detect_complaint
 from src.analysis.pipeline import analyze_reviews
 from src.analysis.priority import calculate_priorities
 from src.analysis.sentiment import analyze_sentiment
@@ -152,6 +153,46 @@ def test_clear_short_complaints_remain_unclassified_issues(text):
     assert classify_text(text) == ["Other / Unclassified"]
 
 
+@pytest.mark.parametrize(("text", "issues"), [
+    ("Good game, but too many cheaters", ["Gameplay"]),
+    ("Great game, but terrible lag and frequent crashes",
+     ["Bugs / Crashes", "Performance / Optimization"]),
+    ("The game is fun, but matchmaking is unfair", ["Game Balance"]),
+    ("Great game, no lag at all", []),
+    ("They finally fixed the bugs", []),
+    ("Worst game ever", ["Other / Unclassified"]),
+])
+def test_second_pass_other_classification_examples(text, issues):
+    assert set(classify_text(text)) == set(issues)
+
+
+def test_second_pass_supports_multiple_labels():
+    assert classify_text("Too many cheaters and matchmaking is unfair") == [
+        "Gameplay", "Game Balance",
+    ]
+
+
+def test_second_pass_is_not_called_for_concrete_primary_issue(monkeypatch):
+    def unexpected(_text):
+        raise AssertionError("second-pass classifier must not run")
+
+    monkeypatch.setattr(issue_detection, "classify_other_complaint", unexpected)
+    assert set(classify_text("Terrible lag and frequent crashes")) == {
+        "Bugs / Crashes", "Performance / Optimization",
+    }
+
+
+@pytest.mark.parametrize("text", [
+    "This game is not bad",
+    "No cheaters in my matches",
+    "Matchmaking is not unfair",
+    "There is no high ping",
+])
+def test_second_pass_negated_complaints_are_not_issues(text):
+    assert detect_complaint(text) is False
+    assert classify_text(text) == []
+
+
 @pytest.mark.parametrize("text", [
     "The black screen was fixed",
     "The HUD is not confusing",
@@ -184,7 +225,70 @@ def test_pipeline_result_and_json(reviews_df):
     assert result["summary"]["review_count"] == len(reviews_df)
     assert sum(c["review_count"] for c in result["clusters"]) == len(reviews_df)
     assert all(c["keywords"] and c["representative_reviews"] for c in result["clusters"])
+    assert all(c["label_kind"] in {"general", "issue", "other", "mixed"} for c in result["clusters"])
     assert json.loads(json.dumps(result))["game"]["app_id"] == 999
+
+
+def _cluster_profile(rows):
+    frame = pd.DataFrame([
+        {"cluster_id": 0, "is_complaint": complaint, "issue_types": issues}
+        for complaint, issues in rows
+    ])
+    clusters = [{"cluster_id": 0, "keywords": []}]
+    annotate_cluster_types(clusters, frame)
+    return clusters[0]
+
+
+def test_cluster_profile_is_general_when_non_complaints_are_majority():
+    cluster = _cluster_profile([
+        (False, []), (False, []), (False, []), (True, ["Bugs / Crashes"]),
+    ])
+    assert cluster["label_kind"] == "general"
+    assert cluster["dominant_issue_type"] is None
+    assert cluster["complaint_ratio"] == pytest.approx(0.25)
+
+
+def test_cluster_profile_uses_dominant_specific_issue():
+    cluster = _cluster_profile([
+        (True, ["Bugs / Crashes"]), (True, ["Bugs / Crashes"]),
+        (True, ["Bugs / Crashes"]), (True, ["Gameplay"]), (False, []),
+    ])
+    assert cluster["label_kind"] == "issue"
+    assert cluster["dominant_issue_type"] == "Bugs / Crashes"
+
+
+def test_cluster_profile_uses_other_only_when_other_is_dominant():
+    cluster = _cluster_profile([
+        (True, ["Other / Unclassified"]), (True, ["Other / Unclassified"]),
+        (True, ["Other / Unclassified"]), (True, ["Gameplay"]), (False, []),
+    ])
+    assert cluster["label_kind"] == "other"
+    assert cluster["dominant_issue_type"] == "Other / Unclassified"
+
+
+def test_cluster_profile_is_mixed_without_a_clear_issue_majority():
+    cluster = _cluster_profile([
+        (True, ["Bugs / Crashes"]), (True, ["Bugs / Crashes"]),
+        (True, ["Gameplay"]), (True, ["Gameplay"]),
+        (True, ["Other / Unclassified"]), (False, []),
+    ])
+    assert cluster["label_kind"] == "mixed"
+    assert cluster["dominant_issue_type"] is None
+
+
+def test_cluster_profile_counts_multilabel_reviews_once_per_issue():
+    cluster = _cluster_profile([
+        (True, ["Bugs / Crashes", "Performance / Optimization"]),
+        (True, ["Bugs / Crashes"]), (False, []),
+    ])
+    assert cluster["issue_review_counts"] == {
+        "Bugs / Crashes": 2, "Performance / Optimization": 1,
+    }
+    assert cluster["issue_review_ratios"] == {
+        "Bugs / Crashes": 1.0, "Performance / Optimization": 0.5,
+    }
+    assert sum(cluster["issue_review_ratios"].values()) > 1.0
+    assert cluster["label_kind"] == "issue"
 
 
 def test_priorities_range_and_order(reviews_df):
