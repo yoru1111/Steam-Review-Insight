@@ -9,6 +9,7 @@ from src.analysis.exceptions import ClusteringError, EmptyVocabularyError, Input
 import src.analysis.issue_detection as issue_detection
 from src.analysis.issue_detection import add_issue_types, annotate_cluster_types, classify_text, detect_complaint
 from src.analysis.pipeline import analyze_reviews
+from src.analysis.positive_aspects import add_positive_aspects, classify_positive_aspects, summarize_positive_aspects
 from src.analysis.priority import calculate_priorities
 from src.analysis.sentiment import analyze_sentiment
 from src.analysis.tfidf import vectorize_reviews
@@ -226,7 +227,46 @@ def test_pipeline_result_and_json(reviews_df):
     assert sum(c["review_count"] for c in result["clusters"]) == len(reviews_df)
     assert all(c["keywords"] and c["representative_reviews"] for c in result["clusters"])
     assert all(c["label_kind"] in {"general", "issue", "other", "mixed"} for c in result["clusters"])
+    assert "positive_aspects" in result
     assert json.loads(json.dumps(result))["game"]["app_id"] == 999
+
+
+@pytest.mark.parametrize(("text", "aspects"), [
+    ("Fun gameplay with responsive controls", ["Gameplay"]),
+    ("The graphics are stunning and the soundtrack is amazing",
+     ["Graphics / Visuals", "Sound / Music"]),
+    ("I loved the story and enjoyed exploring", ["Story / Narrative", "Content / Exploration"]),
+    ("Good game", []),
+    ("Nice, simply the best", []),
+    ("The graphics are terrible and gameplay is boring", []),
+    ("The graphics are not good and the gameplay isn't fun", []),
+])
+def test_positive_aspect_context_rules(text, aspects):
+    assert classify_positive_aspects(text) == aspects
+
+
+def test_positive_and_complaint_labels_are_independent_in_mixed_review():
+    text = "The soundtrack is amazing, but gameplay is repetitive and boring"
+    assert classify_positive_aspects(text) == ["Sound / Music"]
+    assert classify_text(text) == ["Gameplay"]
+
+
+def test_positive_aspect_summary_is_multilabel_and_uses_total_review_denominator():
+    frame = pd.DataFrame([
+        {"review_id": 1, "review_text": "Amazing graphics and excellent soundtrack", "sentiment_score": 0.8},
+        {"review_id": 2, "review_text": "The graphics are stunning", "sentiment_score": 0.6},
+        {"review_id": 3, "review_text": "Good game", "sentiment_score": 0.7},
+    ])
+    summary = summarize_positive_aspects(add_positive_aspects(frame), representative_count=1)
+    by_type = {item["aspect_type"]: item for item in summary}
+
+    assert by_type["Graphics / Visuals"]["review_count"] == 2
+    assert by_type["Graphics / Visuals"]["review_ratio"] == pytest.approx(2 / 3)
+    assert by_type["Sound / Music"]["review_count"] == 1
+    assert by_type["Sound / Music"]["review_ratio"] == pytest.approx(1 / 3)
+    assert by_type["Graphics / Visuals"]["representative_reviews"] == [
+        {"review_id": 1, "text": "Amazing graphics and excellent soundtrack"}
+    ]
 
 
 def _cluster_profile(rows):

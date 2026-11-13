@@ -35,6 +35,7 @@ def test_search_and_analyze(reviews_df):
         response = client.post("/api/analyze", json={"app_id": 999, "limit": 12, "k": 4, "refresh": False})
         assert response.status_code == 200, response.text
         assert response.json()["metadata"]["cache_used"] is True
+        assert isinstance(response.json()["positive_aspects"], list)
 
 
 def test_analyze_accepts_balanced_sample_mode(reviews_df):

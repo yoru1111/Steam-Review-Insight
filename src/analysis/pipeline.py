@@ -7,6 +7,7 @@ from .clustering import cluster_reviews, summarize_clusters
 from .config import AnalysisConfig
 from .exceptions import InputValidationError
 from .issue_detection import add_issue_types, annotate_cluster_types
+from .positive_aspects import add_positive_aspects, summarize_positive_aspects
 from .priority import calculate_priorities
 from .sentiment import analyze_sentiment
 from .tfidf import vectorize_reviews
@@ -25,10 +26,12 @@ def analyze_reviews(df: pd.DataFrame, config: AnalysisConfig | None = None,
     labels, model, silhouette, warnings = cluster_reviews(vectors, config.clustering)
     working["cluster_id"] = labels
     working = add_issue_types(working)
+    working = add_positive_aspects(working)
     clusters = summarize_clusters(working, vectors, vectorizer, model, config.clustering)
     annotate_cluster_types(clusters, working)
     priorities = calculate_priorities(working, config.priority_weights, config.clustering.representative_reviews,
                                       config.min_priority_reviews)
+    positive_aspects = summarize_positive_aspects(working, config.clustering.representative_reviews)
 
     voted = working["voted_up"].astype(bool)
     labels_count = working["sentiment_label"].value_counts()
@@ -47,6 +50,7 @@ def analyze_reviews(df: pd.DataFrame, config: AnalysisConfig | None = None,
                        "silhouette_score": silhouette},
         "clusters": clusters,
         "priorities": priorities,
+        "positive_aspects": positive_aspects,
         "metadata": {"analyzed_at_utc": datetime.now(timezone.utc).isoformat(),
                      "data_source": meta.get("data_source", "in_memory_dataframe"),
                      "cache_used": bool(meta.get("cache_used", False)),
