@@ -109,6 +109,7 @@ def summarize_positive_aspects(
             "aspect_type": aspect,
             "review_count": int(len(group)),
             "review_ratio": float(len(group) / total),
+            "positive_ratio": float(group["voted_up"].astype(bool).mean()),
             "representative_reviews": examples,
         })
     return sorted(summaries, key=lambda item: (-item["review_count"], item["aspect_type"]))

@@ -32,8 +32,9 @@ UI는 이 이슈를 순위에서 빼고 '근거 리뷰 부족'으로 따로 보�
 긍정 표현이 함께 발견된 결과를 다중 라벨로 집계한 배열입니다. 일반적인 칭찬만 있는 리뷰에는 요소를
 추정하지 않습니다. `review_ratio`의 분모는 분석한 전체 리뷰 수입니다. 한 리뷰가 여러 긍정 요소에
 포함될 수 있으므로 요소별 `review_count` 또는 `review_ratio`의 합은 전체 리뷰 수 또는 100%를 넘을 수
-있습니다. 현재 `aspect_type`은 `Gameplay`, `Graphics / Visuals`, `Sound / Music`, `Story / Narrative`,
-`Content / Exploration` 중 하나입니다.
+있습니다. `positive_ratio`는 그 요소를 칭찬한 리뷰 중 Steam에서 추천한 리뷰의 비율로, 집계 이후에
+참고용으로 붙이는 값이며 탐지에는 쓰이지 않습니다. 현재 `aspect_type`은 `Gameplay`, `Graphics / Visuals`,
+`Sound / Music`, `Story / Narrative`, `Content / Exploration` 중 하나입니다.
 
 ```json
 {
@@ -42,6 +43,7 @@ UI는 이 이슈를 순위에서 빼고 '근거 리뷰 부족'으로 따로 보�
       "aspect_type": "Sound / Music",
       "review_count": 24,
       "review_ratio": 0.12,
+      "positive_ratio": 0.92,
       "representative_reviews": [
         {"review_id": 123456789, "text": "The soundtrack is amazing, but combat feels repetitive."}
       ]

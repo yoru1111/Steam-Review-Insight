@@ -253,9 +253,10 @@ def test_positive_and_complaint_labels_are_independent_in_mixed_review():
 
 def test_positive_aspect_summary_is_multilabel_and_uses_total_review_denominator():
     frame = pd.DataFrame([
-        {"review_id": 1, "review_text": "Amazing graphics and excellent soundtrack", "sentiment_score": 0.8},
-        {"review_id": 2, "review_text": "The graphics are stunning", "sentiment_score": 0.6},
-        {"review_id": 3, "review_text": "Good game", "sentiment_score": 0.7},
+        {"review_id": 1, "review_text": "Amazing graphics and excellent soundtrack", "sentiment_score": 0.8,
+         "voted_up": True},
+        {"review_id": 2, "review_text": "The graphics are stunning", "sentiment_score": 0.6, "voted_up": False},
+        {"review_id": 3, "review_text": "Good game", "sentiment_score": 0.7, "voted_up": True},
     ])
     summary = summarize_positive_aspects(add_positive_aspects(frame), representative_count=1)
     by_type = {item["aspect_type"]: item for item in summary}
@@ -264,6 +265,8 @@ def test_positive_aspect_summary_is_multilabel_and_uses_total_review_denominator
     assert by_type["Graphics / Visuals"]["review_ratio"] == pytest.approx(2 / 3)
     assert by_type["Sound / Music"]["review_count"] == 1
     assert by_type["Sound / Music"]["review_ratio"] == pytest.approx(1 / 3)
+    assert by_type["Graphics / Visuals"]["positive_ratio"] == pytest.approx(1 / 2)
+    assert by_type["Sound / Music"]["positive_ratio"] == pytest.approx(1.0)
     assert by_type["Graphics / Visuals"]["representative_reviews"] == [
         {"review_id": 1, "text": "Amazing graphics and excellent soundtrack"}
     ]

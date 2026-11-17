@@ -383,6 +383,8 @@ select { height: 36px; cursor: pointer; }
   color: var(--primary);
 }
 .priority-list > li:first-child .rank { background: var(--accent); color: var(--on-accent); }
+.positive-list > li:first-child .rank { background: var(--good); }
+.positive-list .score { color: var(--good); }
 .priority-main { grid-area: main; display: grid; gap: 8px; min-width: 0; }
 .priority-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .score { grid-area: score; font-size: 20px; font-weight: 800; text-align: right; }
@@ -508,8 +510,10 @@ cite { font-style: normal; font-size: 11px; }
 .complaint-rank { font-size: 12px; font-weight: 800; color: var(--accent); }
 .complaints > li:first-child { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 
-.praise-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 10px; }
-blockquote.praise { padding: 12px 14px; background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--good); }
+.praises .complaint-rank { color: var(--good); }
+.praises .complaint-icon { background: color-mix(in srgb, var(--good) 10%, var(--card-2)); }
+.praises blockquote { border-left-color: var(--good); }
+.praises > li:first-child { border-color: color-mix(in srgb, var(--good) 35%, var(--line)); }
 
 .footnote { text-align: center; padding: 4px 0; }
 

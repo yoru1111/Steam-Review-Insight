@@ -20,6 +20,14 @@ const ISSUES = {
   [OTHER]: ["기타 불만", "other", "📝"],
 };
 
+const POSITIVES = {
+  "Gameplay": ["게임플레이", "🎮"],
+  "Graphics / Visuals": ["그래픽·비주얼", "🖼️"],
+  "Sound / Music": ["사운드·음악", "🎵"],
+  "Story / Narrative": ["스토리", "📖"],
+  "Content / Exploration": ["콘텐츠·탐험", "🗺️"],
+};
+
 const MODE_KEY = "sri-view-mode";
 
 const ERROR_TITLES = {
@@ -78,10 +86,10 @@ function steamPopulation(metadata) {
 }
 
 // Real Steam reviews can run to thousands of characters; show 4 lines and expand on click/Enter.
-function quoteBlock(text, extra = null, className = "") {
+function quoteBlock(text, extra = null) {
   const toggle = (event) => event.currentTarget.classList.toggle("expanded");
   return el("blockquote", {
-    class: `quote ${className}`.trim(),
+    class: "quote",
     tabindex: "0",
     title: "눌러서 전체 보기 / 접기",
     onclick: toggle,
@@ -286,18 +294,20 @@ function verdict(ratio) {
   return ["대체로 혹평", "bad"];
 }
 
-function simpleView({ game, summary, priorities, clusters, metadata }) {
+function simpleView({ game, summary, priorities, positive_aspects, metadata }) {
   const total = summary.review_count;
+  const minReviews = metadata.config.min_priority_reviews;
   // The backend flags issues raised by too few reviews (sufficient_evidence); both views leave them out of the ranking.
   const named = priorities.filter((p) => p.issue_type !== OTHER);
   const complaints = named.filter((p) => p.sufficient_evidence).slice(0, 3);
   const skipped = named.filter((p) => !p.sufficient_evidence).length;
-  // Clusters are hidden here; only their representative reviews are borrowed when most of the group recommends.
-  const praised = clusters.filter((c) => c.positive_ratio >= 0.8).sort((a, b) => b.review_count - a.review_count);
+  // Same evidence bar as complaints; the backend already sorts aspects by review count.
+  const praised = positive_aspects.filter((a) => a.review_count >= minReviews).slice(0, 3);
+  const thinPraise = positive_aspects.filter((a) => a.review_count < minReviews).length;
   return [
     isBalanced(metadata) ? balancedVerdictCard(game, summary, metadata) : verdictCard(game, summary),
-    complaintSection(complaints, total, skipped, metadata.config.min_priority_reviews),
-    praiseSection(praised),
+    complaintSection(complaints, total, skipped, minReviews),
+    praiseSection(praised, total, thinPraise, minReviews),
     el("p", { class: "muted small footnote" },
       `리뷰 ${num(total)}건을 자동으로 분석한 결과라 실제 의견과 다를 수 있어요. 숫자와 근거는 ‘자세히’에서 볼 수 있어요.`),
   ].filter(Boolean);
@@ -372,12 +382,26 @@ function complaintCard(p, rank, total, quote) {
     quote && quoteBlock(`“${quote.text}”`));
 }
 
-function praiseSection(clusters) {
-  const quotes = clusters.map((c) => c.representative_reviews[0]).filter(Boolean).slice(0, 3);
-  if (!quotes.length) return null;
+function praiseSection(items, total, skipped, minReviews) {
+  const shown = new Set();
   return el("section", { class: "section" },
-    sectionHead("좋게 본 점", "추천이 많은 리뷰 묶음에서 고른 리뷰예요"),
-    el("div", { class: "praise-grid" }, quotes.map((review) => quoteBlock(`“${review.text}”`, null, "praise"))));
+    sectionHead(items.length === 3 ? "좋게 본 점 TOP 3" : "좋게 본 점", "리뷰에서 구체적으로 칭찬한 요소를 많이 나온 순서로 보여드려요"),
+    items.length
+      ? el("ol", { class: "complaints praises" }, items.map((a, i) => praiseCard(a, i + 1, total, pickQuote(a, shown))))
+      : el("p", { class: "card muted" }, "리뷰에서 구체적으로 칭찬한 요소를 찾지 못했어요."),
+    skipped > 0 && el("p", { class: "muted small" },
+      `리뷰 ${minReviews}건 미만에서만 나온 요소 ${skipped}개는 ‘자세히’에서 볼 수 있어요.`));
+}
+
+function praiseCard(a, rank, total, quote) {
+  const [label, icon] = POSITIVES[a.aspect_type] || [a.aspect_type, "👍"];
+  return el("li", { class: "card complaint" },
+    el("span", { class: "complaint-icon", "aria-hidden": "true" }, icon),
+    el("h3", {}, el("span", { class: "complaint-rank" }, `${rank}위`), label),
+    el("p", {},
+      `리뷰 ${num(total)}건 중 `, el("b", {}, `${num(a.review_count)}건`), "에서 이 점을 칭찬했고, ",
+      "그중 ", el("b", {}, pct(a.positive_ratio)), "가 게임을 추천했어요."),
+    quote && quoteBlock(`“${quote.text}”`));
 }
 
 // ---------- detail view ----------
@@ -391,6 +415,7 @@ function detailView(result) {
     el("div", { class: "grid-2" }, recommendCard(result), sentimentCard(result)),
     prioritySection(result.priorities.filter((p) => p.sufficient_evidence), minReviews),
     thinEvidenceSection(result.priorities.filter((p) => !p.sufficient_evidence), minReviews),
+    positiveSection(result.positive_aspects, minReviews),
     clusterSection(result.clusters, result.summary.review_count),
     warningsSection(isBalanced(result.metadata) ? [BALANCED_NOTE, ...result.warnings] : result.warnings),
     configSection(result.metadata.config),
@@ -538,6 +563,41 @@ function priorityRow(p, rank) {
             scorePart("비추천 비율", basis.negative_review_ratio, basis.weights.negative_ratio),
             scorePart("부정 강도", basis.negative_sentiment_severity, basis.weights.negative_severity))),
         reviewQuotes("가장 부정적인 리뷰", p.representative_reviews))));
+}
+
+// Ranked by review count (backend order); aspects below the complaint evidence bar stay listed but unranked.
+function positiveSection(items, minReviews) {
+  const ordered = [...items.filter((a) => a.review_count >= minReviews), ...items.filter((a) => a.review_count < minReviews)];
+  let rank = 0;
+  return el("section", { class: "section" },
+    sectionHead("좋게 본 점", [
+      "리뷰 문장에 구체적인 대상과 칭찬 표현이 함께 나온 경우만 세요",
+      "한 리뷰가 여러 요소에 들어갈 수 있어요",
+      `리뷰 ${minReviews}건 이상에서 나온 요소만 순위를 매겨요`,
+    ].join(" · ")),
+    ordered.length
+      ? el("ol", { class: "priority-list positive-list" },
+        ordered.map((a) => positiveRow(a, a.review_count >= minReviews ? ++rank : null)))
+      : el("p", { class: "muted" }, "리뷰에서 구체적으로 칭찬한 요소를 찾지 못했어요."));
+}
+
+function positiveRow(a, rank) {
+  const [label] = POSITIVES[a.aspect_type] || [a.aspect_type];
+  const unranked = rank == null;
+  return el("li", { class: unranked ? "priority card is-other" : "priority card" },
+    el("details", {},
+      el("summary", {},
+        el("span", { class: "rank" }, unranked ? "–" : rank),
+        el("div", { class: "priority-main" },
+          el("div", { class: "priority-title" },
+            el("span", { class: "chip", style: "--chip:var(--good)", title: a.aspect_type }, label),
+            unranked && el("span", { class: "muted small" }, "근거 리뷰 부족 · 참고용"))),
+        el("b", { class: "score", title: "전체 리뷰 중 이 요소를 칭찬한 비율" }, pct(a.review_ratio, 1)),
+        el("ul", { class: "facts" },
+          el("li", {}, "리뷰 ", el("b", {}, `${num(a.review_count)}건`)),
+          el("li", {}, "그중 추천 ", el("b", {}, pct(a.positive_ratio))),
+          el("li", { class: "more" }, "리뷰 보기"))),
+      el("div", { class: "details-body" }, reviewQuotes("글 감성이 가장 긍정적인 리뷰", a.representative_reviews))));
 }
 
 function scorePart(label, value, weight) {

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sri-verify",
+      "runtimeExecutable": "C:/Users/kimyu/AppData/Local/Temp/claude/2ac7a9c1c784a796/06616be3-2d2e-400d-9c1a-e2480b9e7955/scratchpad/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "backend.main:app", "--port", "8765"],
+      "port": 8765
+    }
+  ]
+}
