@@ -96,6 +96,10 @@ Human Gold evaluation used 70 issue-eligible rows from the 80-review file; uncer
 
 Thus Micro-F1 changed from 0.3226 to 0.4638 and then to 0.8046. The first pass mainly removed false positives; the second recovered many previously unsupported labels. These are development-set results, not final generalization results. The same Gold data was inspected during rule improvement, so the final number may overestimate performance on unseen reviews. No Gold review IDs or full review sentences were hardcoded into the classifier or tests, but an independent dataset is still required.
 
+### Latest Classifier Re-evaluation (2026-11-17)
+
+The current classifier was re-evaluated on the same 70 eligible human-labeled Cyberpunk 2077 reviews using the original label-normalization protocol. The previous `ce27bf4` classifier produced TP=35, FP=8, and FN=9 (Precision 0.8140, Recall 0.7955, Micro-F1 0.8046), while the current HEAD produced TP=35, FP=9, and FN=9 (Precision 0.7955, Recall 0.7955, Micro-F1 0.7955). Micro-F1 therefore changed by -0.0091, while exact set match remained 0.8286 for both versions. Only one of the 70 predictions changed: the phrase “Calling it dlc is unfair tho” combined the complaint signal `unfair` with the `dlc` keyword and added a Monetization false positive. To preserve comparability, Monetization and Game Balance were not given additional Korean Gold-label mappings. This remains a development-Gold result from data inspected during rule improvement, not an independent held-out evaluation.
+
 ## 6. Limitations
 
 - **Short and imbalanced reviews:** Very short comments provide little context. Recent samples can contain far more recommended than not-recommended reviews, while balancing changes the observed distribution by design.
