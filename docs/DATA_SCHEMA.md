@@ -61,3 +61,18 @@ df = pd.read_csv(
 texts = df["review_clean"].tolist()
 labels = df["sentiment"].tolist()
 ```
+
+## 2차 확장 데이터 계약
+
+리뷰 CSV의 위 22개 컬럼과 타입은 유지한다. 추가된 메타데이터는 DataFrame과 별도의 dict로
+전달한다. 기간 비교 DataFrame도 같은 스키마다.
+
+`review_period.requested_start_utc`와 `requested_end_exclusive_utc`는 요청 구간이고,
+`actual_start_utc`와 `actual_end_utc`는 최종 반환 리뷰의 작성 시각 최소·최대다.
+후자의 끝은 관측된 최종 작성 시각이다. API 요청 구간의 배타적 종료 경계와 구분한다.
+
+표본 및 모집단 비율은 0~1 숫자이며, 알 수 없는 모집단이나 과거 품질 집계는 null이다.
+게임 상세 `release_date`는 정확한 날짜가 확인된 경우 YYYY-MM-DD이고,
+출시 예정·부분 날짜는 `release_date_raw`를 보존하며 정규 날짜는 null이다.
+게임 순위와 비교 결과의 전체 필드 정의는 [API 계약](API_CONTRACT.md)과
+[2차 확장 설명](DATA_PIPELINE_EXTENSION.md)을 참고한다.

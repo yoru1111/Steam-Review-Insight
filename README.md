@@ -322,3 +322,28 @@ Steam-Review-Insight/
 - [Cyberpunk 2077 10k 표본 실험](cyberpunk_10k_experiment.md)
 - [Steam IStoreService API 문서](https://partner.steamgames.com/doc/webapi/IStoreService)
 - [Steam Web API 이용 약관](https://steamcommunity.com/dev/apiterms)
+
+## 데이터 파이프라인 2차 확장 실행
+
+Python 3.12 가상환경에서 최신 의존성을 설치한다. Windows에서 IANA 시간대 계산에 필요한
+tzdata를 포함한다. 아래 명령은 프로젝트 루트에서 실행한다.
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m src.data_pipeline.cli compare --appid 1091500 --reference-date 2026-11-01 --window-days 7 --limit-per-period 100 --sample-mode recent
+.\.venv\Scripts\python.exe -m src.data_pipeline.cli game-details --appid 1091500
+.\.venv\Scripts\python.exe -m src.data_pipeline.cli popular --type top_sellers --limit 20
+.\.venv\Scripts\python.exe -m src.data_pipeline.cli popular --type most_played --limit 20
+.\.venv\Scripts\python.exe -m src.data_pipeline.cli validate-games --limit 20
+```
+
+자동 테스트는 모의 응답을 사용한다. validate-games는 실제 Steam 연결을 수행하는 별도 명령이며
+게임당 리뷰 1건만 확인한다. compare의 기본 최소 정책은 30건이며 목표가 부족하면 상태를 반환한다.
+compare CLI는 comparison_ready=true일 때 종료 코드 0, 준비 부족이면 2를 반환한다.
+진단 보고서는 reports/game_metadata_20_validation.json 및 .md에 저장한다.
+
+새 API는 `POST /api/reviews/compare`, `GET /api/games/details/{app_id}`,
+`GET /api/games/popular`이다. 기존 분석 응답에는 sampling, data_quality, review_period가 추가된다.
+[2차 확장 및 Python 예제](docs/DATA_PIPELINE_EXTENSION.md), [API 계약](docs/API_CONTRACT.md),
+[CSV 스키마](docs/DATA_SCHEMA.md)를 참고한다.

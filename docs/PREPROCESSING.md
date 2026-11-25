@@ -168,3 +168,17 @@ app = create_app(ReviewPipeline())
 키워드 검색은 저장된 텍스트에 대한 부분 검색이다. 한국어 UI 검색어를 영문 리뷰에서 찾으려면
 UI나 분석 단계에서 `버그`를 `bug`처럼 대응시킬 수 있다.
 [시스템 팀의 Adapter 계약](https://github.com/yoru1111/Steam-Review-Insight/blob/feat/analysis-backend/backend/data_adapter.py)
+
+## 2차 확장 인수인계
+
+표본·모집단, 실제 작성 기간과 단계별 제외 건수를 metadata에 추가했다.
+기간별 데이터는 `collect_reviews_by_period`, `get_comparison_reviews`로 제공한다.
+게임 선택 데이터는 `get_game_details`, `get_game_details_batch`, `get_popular_games`를 사용한다.
+상세 캐시의 게임 이름도 기존 로컬 검색에 활용한다.
+
+기간 캐시는 `data/raw/comparisons`와 `data/processed/comparisons` 아래에 별도로 저장한다.
+품질 보고서의 입력·제외·정제 건수는 해당 정제 스냅샷의 메타데이터와 연결한다.
+과거 게임별 CSV 캐시에 품질 보고서가 없으면 제외 건수는 null이다.
+API 갱신 실패 시 제공하는 이전 캐시의 통계와 실패한 latest_attempt를 구분한다.
+[기간 경계, 메타데이터와 캐시 정책](DATA_PIPELINE_EXTENSION.md) 및
+[신규 데이터 API](API_CONTRACT.md)에 시스템·UI 연동 예제를 기록했다.
