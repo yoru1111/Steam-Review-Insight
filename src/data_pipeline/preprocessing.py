@@ -78,7 +78,7 @@ def normalize(text):
     return original, clean
 
 
-def prepare(rows, catalog, *, language="english"):
+def prepare(rows, catalog, *, language="english", period=None):
     stats = Counter()
     removed = Counter()
     languages = Counter()
@@ -125,6 +125,14 @@ def prepare(rows, catalog, *, language="english"):
     records = []
     examples = []
     for (game, identifier), (raw, _, dates, code) in selected.items():
+        if period is not None:
+            created = dates["created_at_utc"]
+            if created is None:
+                removed["invalid_timestamp_for_period"] += 1
+                continue
+            if not period[0] <= created < period[1]:
+                removed["outside_requested_period"] += 1
+                continue
         text = raw.get("review_text")
         vote = boolean(raw.get("voted_up"))
         if text is None or isinstance(text, str) and not text.strip():

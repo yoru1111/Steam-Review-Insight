@@ -140,3 +140,12 @@ def test_updated_duplicate_counts_only_once(pipeline, transport):
     pipeline.preprocess_reviews(620)
     frame = pipeline.get_processed_reviews(620)
     assert frame.loc[frame.review_id == "1", "review_text"].item() == "new"
+
+def test_empty_first_page_conflicting_with_total_is_not_success(pipeline, transport):
+    payload = page()
+    payload["response"]["total_matching"] = 100
+    transport.queue.append(payload)
+    with pytest.raises(CollectionError, match="conflicts"):
+        pipeline.collect_reviews(620, limit=2)
+    status = pipeline.get_collection_status(620)
+    assert status["collection_status"] == "failed"

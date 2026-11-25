@@ -11,6 +11,7 @@ from .positive_aspects import add_positive_aspects, summarize_positive_aspects
 from .priority import calculate_priorities
 from .sentiment import analyze_sentiment
 from .tfidf import vectorize_reviews
+from src.data_pipeline.metadata import json_safe
 
 REQUIRED_COLUMNS = {"review_text", "review_clean", "voted_up"}
 
@@ -36,7 +37,7 @@ def analyze_reviews(df: pd.DataFrame, config: AnalysisConfig | None = None,
     voted = working["voted_up"].astype(bool)
     labels_count = working["sentiment_label"].value_counts()
     first = working.iloc[0]
-    meta = metadata or {}
+    meta = json_safe(metadata or {})
     result = {
         "game": {"app_id": _native(meta.get("app_id", first.get("app_id"))),
                  "name": meta.get("game_name", first.get("game_name"))},
@@ -51,12 +52,12 @@ def analyze_reviews(df: pd.DataFrame, config: AnalysisConfig | None = None,
         "clusters": clusters,
         "priorities": priorities,
         "positive_aspects": positive_aspects,
-        "metadata": {"analyzed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "metadata": {**meta, "analyzed_at_utc": datetime.now(timezone.utc).isoformat(),
                      "data_source": meta.get("data_source", "in_memory_dataframe"),
                      "cache_used": bool(meta.get("cache_used", False)),
                      "sample_mode": meta.get("sample_mode", "recent"),
                      "sampling": meta.get("sampling"), "config": config.to_dict()},
-        "warnings": warnings + [
+        "warnings": warnings + meta.get("warnings", []) + [
             "VADER may misread sarcasm, game-domain terminology, and context.",
             "Issue labels and priority scores are explainable heuristics, not objective defect severity.",
         ],

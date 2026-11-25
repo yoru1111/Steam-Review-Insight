@@ -13,9 +13,10 @@ from .collector import (
 from .csv_loader import csv_rows
 from .preprocessing import prepare
 from .reporting import build_report, save_report
-from .schema import BOOLEAN_FIELDS, COLUMNS, INTEGER_FIELDS, api_row, app_id, language_code
+from .schema import BOOLEAN_FIELDS, COLUMNS, INTEGER_FIELDS, api_row, app_id, language_code, uint
 from .storage import ROOT, atomic_text, now, read_json, write_json, writer_lock
 from .validation import read_export
+from .metadata import enrich, population, snapshot_runs, source_revision
 
 EXPORT = "steam_reviews_clean.csv"
 LOG = logging.getLogger(__name__)
@@ -56,14 +57,55 @@ def interleave_labels(records):
 
 class ReviewPipeline:
     def __init__(self, root=ROOT, *, catalog_path=None, client_factory=SteamClient,
-                 steam_catalog=None):
+                 steam_catalog=None, public_client=None, details_ttl_seconds=86400, ranking_ttls=None):
         self.root = Path(root).resolve()
         self.catalog_path = Path(catalog_path) if catalog_path is not None else self.root / "data/catalog.local.json"
         self.client_factory = client_factory
         self.steam_catalog = steam_catalog or SteamCatalog(self.root / "data/catalog.steam.json")
+        self.public_client = public_client
+        self.details_ttl_seconds = details_ttl_seconds
+        self.ranking_ttls = ranking_ttls
+        self._details_service = None
+        self._rankings_service = None
+
+    def _details(self):
+        from .game_details import GameDetails
+        if self._details_service is None:
+            self._details_service = GameDetails(
+                self.root, client=self.public_client, ttl_seconds=self.details_ttl_seconds,
+            )
+        return self._details_service
+
+    def get_game_details(self, app_id: int, refresh=False):
+        return self._details().get(app_id, refresh)
+
+    def get_game_details_batch(self, app_ids, refresh=False):
+        return self._details().batch(app_ids, refresh)
+
+    def get_popular_games(self, ranking_type="top_sellers", limit=20, refresh=False):
+        from .rankings import Rankings
+        if self._rankings_service is None:
+            self._rankings_service = Rankings(
+                self.root, client=self.public_client, details=self._details(), ttl_seconds=self.ranking_ttls,
+            )
+        return self._rankings_service.get(ranking_type, limit, refresh)
+
+    def collect_reviews_by_period(self, app_id, start_utc, end_exclusive_utc, **options):
+        from .comparison import collect_reviews_by_period
+        return collect_reviews_by_period(self, app_id, start_utc, end_exclusive_utc, **options)
+
+    def get_comparison_reviews(self, app_id, reference_date, **options):
+        from .comparison import get_comparison_reviews
+        return get_comparison_reviews(self, app_id, reference_date, **options)
 
     def catalog(self):
         games = {}
+        for path in (self.root / "data/game_details").glob("*.json"):
+            entry = read_json(path, {})
+            identifier = app_id(entry.get("app_id"))
+            name = entry.get("name")
+            if identifier and entry.get("game_type") == "game" and isinstance(name, str) and name.strip():
+                games[identifier] = name.strip()
         for path in (ROOT / "config/games.json", self.catalog_path):
             entries = read_json(path, {})
             if not isinstance(entries, dict):
@@ -111,6 +153,7 @@ class ReviewPipeline:
             "source": "api" if selected else (processed or {}).get("source"),
             "language": selected["language"] if selected else (processed or {}).get("language"),
             "cache_used": cached, "run_id": selected["run_id"] if selected else None,
+            "source_revision": source_revision(selected),
             "review_count": selected["review_count"] if selected else (processed or {}).get("clean_rows", 0),
             "raw_count": selected["raw_count"] if selected else None,
             "review_type": selected_type, "review_type_name": REVIEW_TYPES[selected_type],
@@ -128,6 +171,9 @@ class ReviewPipeline:
 
     def get_collection_status(self, app_id: int, review_type=0) -> dict:
         state = read_json(self._raw(app_id) / "state.json", {})
+        attempt = (state.get("attempts_by_review_type") or {}).get(str(review_type))
+        if attempt is not None:
+            state = {**state, "attempt": attempt}
         selected = active_run(state, review_type)
         attempt = state.get("attempt") or {}
         if (not selected and attempt.get("raw_count")
@@ -168,6 +214,8 @@ class ReviewPipeline:
             state = collect(directory, state, self.client_factory(max_requests=max_requests, use_key=use_key),
                             app_id, limit, language, sort, resume=resume, known_game=(
                                 app_id in self.catalog() or bool(active and active["review_count"])
+                                or (read_json(self.root / "data/game_details" / f"{app_id}.json", {})
+                                    .get("game_type") == "game")
                             ), review_type=review_type)
             attempt = state["attempt"]
             active = active_run(state, review_type)
@@ -196,6 +244,7 @@ class ReviewPipeline:
             "game_name": records[0]["game_name"] if records else self.catalog().get(game),
             "csv_path": str(snapshot / EXPORT), "report_path": str(snapshot / "quality_report.json") if report else None,
             "generation": run, "preserved": False, "preprocessing_success": True,
+            "source_revisions": [source_revision(item) for item in context.get("source_runs", [])],
         }
         if context.get("sampling") is not None:
             result["sampling"] = context["sampling"]
@@ -235,9 +284,13 @@ class ReviewPipeline:
                                       and attempt.get("review_type", 0) == 0 else run["status"]),
                 "collected_at_utc": run["finished_at_utc"], "sort": run["sort"], "limit": run["limit"],
                 "cache_used": collection["cache_used"] if collection else True,
+                "source_runs": [run],
                 "error": (attempt.get("error") if attempt and attempt.get("review_type", 0) == 0 else run.get("error")),
             }
-            prepared = prepare(raw, catalog, language=run["language"])
+            period = getattr(self, "period", None)
+            if period:
+                context.update(requested_start_utc=period[0], requested_end_exclusive_utc=period[1])
+            prepared = prepare(raw, catalog, language=run["language"], period=period)
             records = prepared[0]
             report = build_report(*prepared, context)
             if not report["passed"]:
@@ -268,14 +321,25 @@ class ReviewPipeline:
         for label, value in (("positive_limit", positive_limit), ("negative_limit", negative_limit)):
             if type(value) is not int or not 1 <= value <= 25000:
                 raise ValueError(f"{label} must be between 1 and 25000")
-        positive = self.collect_reviews(
-            app_id, positive_limit, refresh=refresh, resume=not refresh, language=language,
-            sort=sort, max_requests=max_requests, use_key=use_key, review_type=1,
-        )
-        negative = self.collect_reviews(
-            app_id, negative_limit, refresh=refresh, resume=not refresh, language=language,
-            sort=sort, max_requests=max_requests, use_key=use_key, review_type=2,
-        )
+        def label_collection(review_type, target):
+            try:
+                return self.collect_reviews(
+                    app_id, target, refresh=refresh, resume=not refresh, language=language,
+                    sort=sort, max_requests=max_requests, use_key=use_key, review_type=review_type,
+                )
+            except CollectionError as exc:
+                status = self.get_collection_status(app_id, review_type)
+                return {
+                    **status, "collection_status": "failed", "run_id": None, "source_revision": None,
+                    "review_count": 0,
+                    "raw_count": 0, "total_matching": None, "language": language,
+                    "review_type": review_type, "error": str(exc), "cache_used": False,
+                }
+
+        positive = label_collection(1, positive_limit)
+        negative = label_collection(2, negative_limit)
+        if not positive["run_id"] and not negative["run_id"]:
+            raise CollectionError(positive["error"] or negative["error"] or "No balanced reviews are available")
         matching_positive = positive.get("total_matching")
         matching_negative = negative.get("total_matching")
         matching_total = (
@@ -316,6 +380,8 @@ class ReviewPipeline:
             "shortages": shortages, "error": "; ".join(errors) or None,
             "api_limit_error": any("429" in error for error in errors),
             "positive_collection": positive, "negative_collection": negative,
+            "source_revisions": [item["source_revision"] for item in (positive, negative)
+                                 if item.get("source_revision")],
         }
 
     def preprocess_balanced_reviews(self, app_id: int, collection, encoding="utf-8-sig") -> dict:
@@ -325,20 +391,35 @@ class ReviewPipeline:
             run_ids = collection["source_run_ids"]
             runs = {name: active_run(state, review_type) for name, review_type in
                     (("positive", 1), ("negative", 2))}
-            if any(not run or run["run_id"] != run_ids[name] for name, run in runs.items()):
+            for name in runs:
+                if run_ids[name] is None:
+                    runs[name] = None
+                elif not runs[name] or runs[name]["run_id"] != run_ids[name]:
+                    attempt = state.get("attempt")
+                    if attempt and attempt["run_id"] == run_ids[name]:
+                        runs[name] = attempt
+                    else:
+                        runs[name] = read_json(directory / run_ids[name] / "run.json")
+            if any(run_ids[name] and (not run or run["run_id"] != run_ids[name]) for name, run in runs.items()):
                 raise CollectionError("Balanced source collections changed. Read their latest status and retry.")
             catalog = self.catalog()
             raw_rows = []
+            unique_ids = set()
             label_mismatches = {"positive": 0, "negative": 0}
             for name, run in runs.items():
+                if run is None:
+                    continue
                 expected = name == "positive"
                 for page in raw_pages(directory, run):
                     for row in parse_page(page)[0]:
+                        if identifier := uint(row.get("recommendationid")):
+                            unique_ids.add(identifier)
                         if row.get("voted_up") is not expected:
                             label_mismatches[name] += 1
                             continue
                         raw_rows.append(api_row(row, app_id, catalog.get(app_id)))
-            prepared = prepare(raw_rows, catalog, language=collection["language"])
+            period = getattr(self, "period", None)
+            prepared = prepare(raw_rows, catalog, language=collection["language"], period=period)
             records = interleave_labels(prepared[0])
             positive = sum(row["voted_up"] for row in records)
             selected = {"positive": positive, "negative": len(records) - positive}
@@ -364,7 +445,7 @@ class ReviewPipeline:
                     "positive": positive / len(records) if records else None,
                     "negative": (len(records) - positive) / len(records) if records else None,
                 },
-                "matching_population": collection["matching_population"],
+                "matching_population": population([run for run in runs.values() if run], balanced=True)[0],
                 "source_run_ids": run_ids, "requests": collection["source_requests"],
                 "requests_this_call": collection["requests"],
                 "duplicates_removed": prepared[2].get("duplicate_id", 0),
@@ -382,13 +463,21 @@ class ReviewPipeline:
                 "sort": collection["sort"], "limit": sum(targets.values()),
                 "cache_used": collection["cache_used"], "error": collection["error"],
                 "sampling": sampling,
+                "source_runs": [run for run in runs.values() if run],
+                "unique_collected_count": len(unique_ids),
             }
+            if period:
+                context.update(requested_start_utc=period[0], requested_end_exclusive_utc=period[1])
             report = build_report(records, prepared[1], prepared[2], prepared[3], prepared[4], context)
             if not report["passed"]:
                 raise ValueError("Quality validation failed; no balanced output was published")
             for warning in report["warnings"]:
                 LOG.warning("App %s balanced sample: %s", app_id, warning)
-            return self._publish_game(app_id, records, context, encoding, report)
+            result = self._publish_game(app_id, records, context, encoding, report)
+            if result["preserved"]:
+                save_report(self._processed(app_id) / "rejected" / uuid4().hex, report)
+                return {**self._cached_processed(app_id), "preserved": True, "preprocessing_success": False}
+            return result
 
     def _cached_processed(self, game):
         directory = self._processed(game)
@@ -427,7 +516,9 @@ class ReviewPipeline:
             raise ValueError("sample_mode must be recent or balanced")
         collection = self.collect_reviews(app_id, limit, refresh=refresh, resume=not refresh)
         current = read_json(self._processed(app_id) / "current.json")
-        if not current or collection["run_id"] != current["raw_run_id"]:
+        revisions = [collection["source_revision"]] if collection.get("source_revision") else []
+        if (not current or collection["run_id"] != current["raw_run_id"]
+                or current.get("source_revisions", []) != revisions):
             result = self.preprocess_reviews(app_id, collection=collection)
         else:
             result = self._cached_processed(app_id)
@@ -442,7 +533,7 @@ class ReviewPipeline:
             "processed_matches_raw": bool(collection["run_id"] and collection["run_id"] == result["raw_run_id"]),
             "processed_at_utc": result["processed_at_utc"], "processed_run_id": result["raw_run_id"],
         }
-        return frame, metadata
+        return frame, enrich(frame, metadata, result, limit, runs=snapshot_runs(self, app_id, result))
 
     def get_balanced_reviews(self, app_id: int, limit=1000, refresh=False):
         """Return an approximately 50:50 analysis sample with explicit population metadata."""
@@ -457,12 +548,15 @@ class ReviewPipeline:
         current_sampling = (current or {}).get("sampling") or {}
         if (not current or current_sampling.get("mode") != "balanced"
                 or current_sampling.get("target_counts") != collection["target_counts"]
-                or current_sampling.get("source_run_ids") != collection["source_run_ids"]):
+                or current_sampling.get("source_run_ids") != collection["source_run_ids"]
+                or current.get("source_revisions") != collection["source_revisions"]):
             result = self.preprocess_balanced_reviews(app_id, collection)
         else:
             result = self._cached_processed(app_id)
         frame = self._read_processed(result).head(limit)
-        sampling = result["sampling"]
+        sampling = result.get("sampling")
+        if not sampling or sampling.get("mode") != "balanced":
+            raise CollectionError("No compatible balanced processed snapshot is available")
         run_id = f"balanced:{collection['source_run_ids']['positive']}:{collection['source_run_ids']['negative']}"
         metadata = {
             "app_id": app_id, "game_name": collection["game_name"], "source": "api", "data_source": "api",
@@ -475,9 +569,13 @@ class ReviewPipeline:
             "processed_matches_raw": sampling["source_run_ids"] == collection["source_run_ids"],
             "processed_at_utc": result["processed_at_utc"], "processed_run_id": result["raw_run_id"],
             "sampling": sampling, "requests": collection["requests"],
+            "latest_attempt": {
+                name: collection[f"{name}_collection"].get("last_attempt")
+                for name in ("positive", "negative")
+            },
             "api_limit_error": collection["api_limit_error"], "error": collection["error"],
         }
-        return frame, metadata
+        return frame, enrich(frame, metadata, result, limit, runs=snapshot_runs(self, app_id, result))
 
     def preprocess_csv(self, path, mapping=None, *, game_id=None, language="english",
                        declared_language=None, encoding="utf-8-sig", dataset=None):
@@ -538,3 +636,8 @@ get_processed_reviews = _default.get_processed_reviews
 get_collection_status = _default.get_collection_status
 get_reviews = _default.get_reviews
 get_balanced_reviews = _default.get_balanced_reviews
+collect_reviews_by_period = _default.collect_reviews_by_period
+get_comparison_reviews = _default.get_comparison_reviews
+get_game_details = _default.get_game_details
+get_game_details_batch = _default.get_game_details_batch
+get_popular_games = _default.get_popular_games

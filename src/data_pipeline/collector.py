@@ -24,11 +24,15 @@ class CollectionError(RuntimeError):
     """A collection error with a safe, URL-free message."""
 
 
-def request_parameters(app_id, language="english", sort=1, cursor="*", page_size=100, review_type=0):
-    return {"input_json": json.dumps({
+def request_parameters(app_id, language="english", sort=1, cursor="*", page_size=100, review_type=0,
+                       period=None):
+    options = {
         "appid": app_id, "filter": sort, "languages": [language], "review_type": review_type,
         "purchase_type": 1, "num_per_page": page_size, "cursor": cursor,
-    }, separators=(",", ":"))}
+    }
+    if period is not None:
+        options.update(date_range_start=period[0], date_range_end=period[1] - 1, filter_offtopic_activity=True)
+    return {"input_json": json.dumps(options, separators=(",", ":"))}
 
 
 def active_run(state, review_type=0):
@@ -87,9 +91,10 @@ class SteamClient:
         self.max_requests = max_requests
         self.key = os.environ.get("STEAM_WEB_API_KEY", "").strip() if use_key else ""
         self.requests = 0
+        self.period = None
 
     def page(self, app_id, language, sort, cursor, page_size, review_type=0):
-        params = request_parameters(app_id, language, sort, cursor, page_size, review_type)
+        params = request_parameters(app_id, language, sort, cursor, page_size, review_type, self.period)
         attempt = 0
         while True:
             if self.requests >= self.max_requests:
@@ -143,7 +148,7 @@ def review_versions(reviews):
 
 
 def collect(directory, state, client, game_id, limit, language, sort, *, resume, known_game, review_type=0):
-    old = state.get("attempt")
+    old = (state.get("attempts_by_review_type") or {}).get(str(review_type), state.get("attempt"))
     options = {"limit": limit, "language": language, "sort": sort, "review_type": review_type}
     if (resume and old and old["status"] in {"partial", "running", "failed"}
             and old.get("resumable", True)
@@ -158,6 +163,10 @@ def collect(directory, state, client, game_id, limit, language, sort, *, resume,
         }
 
     def save(snapshot):
+        snapshot["attempts_by_review_type"] = {
+            **(snapshot.get("attempts_by_review_type") or {}), str(review_type): snapshot["attempt"],
+        }
+        write_json(directory / snapshot["attempt"]["run_id"] / "run.json", snapshot["attempt"])
         write_json(directory / "state.json", snapshot)
 
     state = {**state, "attempt": run}
@@ -191,8 +200,12 @@ def collect(directory, state, client, game_id, limit, language, sort, *, resume,
                 "last_page_at_utc": now(), "requests": previous_requests + client.requests,
                 "total_matching": total if not run["pages"] and total is not None else run["total_matching"],
                 "query_summary": summary if not run["pages"] else run["query_summary"],
+                "population_observed_at_utc": now() if not run["pages"] else run.get("population_observed_at_utc"),
             }
-            if not reviews and not run["pages"] and not known_game:
+            if not reviews and not run["pages"] and total is not None and total > 0:
+                checkpoint.update(status="failed", error="Empty first page conflicts with total_matching",
+                                  resumable=False)
+            elif not reviews and not run["pages"] and not known_game:
                 checkpoint.update(status="failed", error="Empty response for an unverified App ID", resumable=False)
             elif len(identifiers) >= limit:
                 checkpoint.update(status="complete", stop_reason="limit")

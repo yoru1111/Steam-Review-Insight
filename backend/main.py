@@ -15,7 +15,7 @@ from .data_adapter import (
     UnavailableDataAdapter,
     create_default_adapter,
 )
-from .schemas import AnalyzeRequest
+from .schemas import AnalyzeRequest, CompareRequest
 
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 
@@ -63,6 +63,32 @@ def create_app(adapter: ReviewDataAdapter | None = None) -> FastAPI:
     @app.get("/api/analyze/status/{job_id}")
     def analysis_status(job_id: str) -> dict[str, str]:
         raise HTTPException(status_code=501, detail="Background analysis jobs are not implemented; /api/analyze is synchronous")
+
+    def data_operation(request, name, *args, **kwargs):
+        from src.data_pipeline.collector import CollectionError
+        method = getattr(request.app.state.data_adapter, name, None)
+        if method is None:
+            raise HTTPException(status_code=503, detail="Data adapter does not support this operation")
+        try:
+            return method(*args, **kwargs)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (CollectionError, OSError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/games/details/{app_id}")
+    def game_details(request: Request, app_id: int, refresh: bool = False):
+        return data_operation(request, "get_game_details", app_id, refresh=refresh)
+
+    @app.get("/api/games/popular")
+    def popular(request: Request, type: str = Query(default="top_sellers"), limit: int = Query(default=20, ge=1, le=100),
+                refresh: bool = False):
+        return data_operation(request, "get_popular_games", type, limit=limit, refresh=refresh)
+
+    @app.post("/api/reviews/compare")
+    def compare_reviews(payload: CompareRequest, request: Request):
+        result = data_operation(request, "get_comparison_reviews", **payload.model_dump())
+        return result.summary()
 
     # Mounted last so /api/* and /docs keep priority; serves frontend/index.html at "/".
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

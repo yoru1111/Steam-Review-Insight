@@ -84,7 +84,9 @@ def api_row(review, game_id, game_name):
     author = review.get("author")
     author = author if isinstance(author, dict) else {}
     return {
-        "source": "api", "app_id": game_id, "game_name": game_name,
+        "source": "api",
+        "app_id": game_id if app_id(review.get("appid", review.get("app_id", game_id))) == game_id else None,
+        "game_name": game_name,
         "review_id": review.get("recommendationid"), "review_text": review.get("review"),
         "language": review.get("language"), "voted_up": review.get("voted_up"),
         "created_at_utc": review.get("timestamp_created"),

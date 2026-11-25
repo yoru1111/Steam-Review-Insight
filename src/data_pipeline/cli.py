@@ -21,6 +21,25 @@ def parser():
     commands.add_parser("search").add_argument("query")
     commands.add_parser("status").add_argument("--appid", type=int, required=True)
     commands.add_parser("validate").add_argument("--input", type=Path)
+    compare = commands.add_parser("compare")
+    compare.add_argument("--appid", type=int, required=True)
+    compare.add_argument("--reference-date", required=True)
+    compare.add_argument("--window-days", type=int, default=14)
+    compare.add_argument("--timezone", default="Asia/Seoul")
+    compare.add_argument("--language", default="english")
+    compare.add_argument("--limit-per-period", type=int, default=1000)
+    compare.add_argument("--sample-mode", choices=("recent", "balanced"), default="recent")
+    compare.add_argument("--minimum-required-count", type=int, default=30)
+    compare.add_argument("--refresh", action="store_true")
+    details = commands.add_parser("game-details")
+    details.add_argument("--appid", type=int, required=True)
+    details.add_argument("--refresh", action="store_true")
+    popular = commands.add_parser("popular")
+    popular.add_argument("--type", choices=("top_sellers", "most_played"), default="top_sellers")
+    popular.add_argument("--limit", type=int, default=20)
+    popular.add_argument("--refresh", action="store_true")
+    popular.add_argument("--snapshot", type=Path, help="Import an observed official-chart JSON snapshot")
+    commands.add_parser("validate-games").add_argument("--limit", type=int, default=20)
 
     for command in ("collect", "preprocess", "pipeline"):
         options = commands.add_parser(command)
@@ -54,6 +73,33 @@ def main(argv=None):
                         format="%(asctime)s %(levelname)s %(message)s")
     pipeline = ReviewPipeline(args.root)
     try:
+        if args.command == "compare":
+            result = pipeline.get_comparison_reviews(
+                args.appid, args.reference_date, window_days=args.window_days, timezone=args.timezone,
+                language=args.language, limit_per_period=args.limit_per_period, sample_mode=args.sample_mode,
+                minimum_required_count=args.minimum_required_count, refresh=args.refresh,
+            )
+            emit(result.summary())
+            return 0 if result.comparison_ready else 2
+        if args.command == "game-details":
+            result = pipeline.get_game_details(args.appid, refresh=args.refresh)
+            emit(result)
+            return 1 if result["metadata_status"] == "unavailable" else 0
+        if args.command == "popular":
+            if args.snapshot:
+                from .rankings import Rankings
+                snapshot = read_json(args.snapshot)
+                if not isinstance(snapshot, dict) or snapshot.get("ranking_type") != args.type:
+                    raise ValueError("Snapshot ranking_type must match --type")
+                Rankings(pipeline.root).import_snapshot(snapshot)
+            result = pipeline.get_popular_games(args.type, args.limit, args.refresh)
+            emit(result)
+            return 1 if result["status"] == "unavailable" else 0
+        if args.command == "validate-games":
+            from .live_validation import validate_games
+            result = validate_games(pipeline, args.limit)
+            emit(result)
+            return 0 if result["review_api_successes"] == args.limit else 2
         if args.command == "search":
             emit(pipeline.search_games(args.query))
             return 0
