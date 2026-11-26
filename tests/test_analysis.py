@@ -220,7 +220,7 @@ def test_add_issue_types_separates_complaint_from_steam_vote():
 
 
 def test_pipeline_result_and_json(reviews_df):
-    config = AnalysisConfig()
+    config = AnalysisConfig(min_priority_reviews=1)
     config.clustering.k = 4
     result = analyze_reviews(reviews_df, config)
     assert result["summary"]["review_count"] == len(reviews_df)
@@ -228,6 +228,9 @@ def test_pipeline_result_and_json(reviews_df):
     assert all(c["keywords"] and c["representative_reviews"] for c in result["clusters"])
     assert all(c["label_kind"] in {"general", "issue", "other", "mixed"} for c in result["clusters"])
     assert "positive_aspects" in result
+    assert result["positive_aspects"]
+    assert all(item["sufficient_evidence"] is (item["review_count"] >= config.min_priority_reviews)
+               for item in result["positive_aspects"])
     assert json.loads(json.dumps(result))["game"]["app_id"] == 999
 
 
@@ -251,16 +254,24 @@ def test_positive_and_complaint_labels_are_independent_in_mixed_review():
     assert classify_text(text) == ["Gameplay"]
 
 
-def test_positive_aspect_summary_is_multilabel_and_uses_total_review_denominator():
+@pytest.mark.parametrize(("min_reviews", "graphics_evidence", "sound_evidence"), [
+    (1, True, True), (2, True, False), (3, False, False),
+])
+def test_positive_aspect_summary_is_multilabel_and_uses_total_review_denominator(
+    min_reviews, graphics_evidence, sound_evidence
+):
     frame = pd.DataFrame([
         {"review_id": 1, "review_text": "Amazing graphics and excellent soundtrack", "sentiment_score": 0.8,
          "voted_up": True},
         {"review_id": 2, "review_text": "The graphics are stunning", "sentiment_score": 0.6, "voted_up": False},
         {"review_id": 3, "review_text": "Good game", "sentiment_score": 0.7, "voted_up": True},
     ])
-    summary = summarize_positive_aspects(add_positive_aspects(frame), representative_count=1)
+    summary = summarize_positive_aspects(add_positive_aspects(frame), representative_count=1, min_reviews=min_reviews)
     by_type = {item["aspect_type"]: item for item in summary}
 
+    assert [item["aspect_type"] for item in summary] == ["Graphics / Visuals", "Sound / Music"]
+    assert by_type["Graphics / Visuals"]["sufficient_evidence"] is graphics_evidence
+    assert by_type["Sound / Music"]["sufficient_evidence"] is sound_evidence
     assert by_type["Graphics / Visuals"]["review_count"] == 2
     assert by_type["Graphics / Visuals"]["review_ratio"] == pytest.approx(2 / 3)
     assert by_type["Sound / Music"]["review_count"] == 1

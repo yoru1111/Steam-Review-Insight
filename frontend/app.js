@@ -138,9 +138,10 @@ function translateWarning(text) {
 // ---------- API ----------
 
 class ApiError extends Error {
-  constructor(title, detail = "") {
+  constructor(title, detail = "", status = 0) {
     super(title);
     this.detail = detail;
+    this.status = status;
   }
 }
 
@@ -158,7 +159,7 @@ async function request(path, options) {
   }
   const body = await response.json().catch(() => ({}));
   if (response.ok) return body;
-  throw new ApiError(ERROR_TITLES[response.status] || `요청 실패 (${response.status})`, formatDetail(body.detail));
+  throw new ApiError(ERROR_TITLES[response.status] || `요청 실패 (${response.status})`, formatDetail(body.detail), response.status);
 }
 
 async function checkHealth() {
@@ -176,20 +177,174 @@ async function checkHealth() {
   }
 }
 
+// ---------- screens and catalog ----------
+
+let catalog = [];
+const knownGames = new Map();
+let catalogTab = "popular";
+let genre = "전체";
+let activeAppId = null;
+let requestVersion = 0;
+let searchVersion = 0;
+
+function gameImage(game) {
+  const name = game.name || `App ID ${game.app_id}`;
+  const placeholder = el("span", { class: "game-image-placeholder", "aria-hidden": "true" }, name);
+  return el("div", { class: "game-image" }, placeholder,
+    el("img", {
+      src: `https://cdn.akamai.steamstatic.com/steam/apps/${game.app_id}/header.jpg`,
+      loading: "lazy", alt: `${name} 게임 이미지`,
+      onerror: (event) => { event.currentTarget.hidden = true; },
+    }));
+}
+
+function buildScreens() {
+  $("#app").append(
+    el("div", { id: "selection-screen", class: "screen" },
+      el("div", { class: "selection-intro" },
+        el("h2", {}, "어떤 게임의 리뷰가 궁금하세요?"),
+        el("p", { class: "muted" }, "게임을 고르면 리뷰 속 개선할 문제와 유지할 강점을 살펴볼 수 있어요.")),
+      el("section", { class: "card panel", "aria-label": "게임 검색과 App ID 입력" },
+        el("form", { id: "search-form", class: "search", role: "search", onsubmit: searchGames },
+          el("input", { id: "query", type: "search", placeholder: "게임 이름으로 검색 (예: Cyberpunk)",
+            maxlength: "100", autocomplete: "off", "aria-label": "게임 이름" }),
+          el("button", { type: "submit", class: "btn" }, "검색")),
+        el("ul", { id: "search-results", class: "search-results", hidden: true, "aria-live": "polite" }),
+        el("form", { id: "app-id-form", class: "direct-entry", onsubmit: (event) => {
+          event.preventDefault();
+          const appId = Number($("#app-id").value);
+          if (Number.isSafeInteger(appId) && appId > 0) location.hash = `/game/${appId}`;
+        } },
+          el("label", { class: "field", for: "app-id" }, "App ID로 바로 열어요",
+            el("input", { id: "app-id", type: "number", min: "1", max: String(Number.MAX_SAFE_INTEGER),
+              required: true, placeholder: "1091500" })),
+          el("button", { type: "submit", class: "btn" }, "분석하러 가기"))),
+      el("section", { class: "section", "aria-label": "편집한 게임 목록" },
+        el("nav", { class: "catalog-tabs", "aria-label": "게임 목록 분류" },
+          [["popular", "최근 인기"], ["recent", "최근 출시"], ["genre", "장르별"]].map(([key, label]) =>
+            el("button", { type: "button", class: "btn", "data-tab": key,
+              "aria-pressed": String(key === catalogTab), onclick: () => {
+                catalogTab = key;
+                renderCatalog();
+              } }, label))),
+        el("p", { id: "catalog-note", class: "muted small", hidden: true }),
+        el("div", { id: "genre-filters", class: "genre-filters", hidden: true, "aria-label": "장르 선택" }),
+        el("div", { id: "game-grid", class: "game-grid" }))),
+    el("div", { id: "analysis-screen", class: "screen", hidden: true },
+      el("div", { id: "game-header" }),
+      el("section", { class: "card panel", "aria-labelledby": "settings-title" },
+        el("h2", { id: "settings-title", class: "panel-title" }, "분석 설정"),
+        el("form", { id: "analyze-form", class: "analyze", onsubmit: analyze },
+          el("label", { class: "field" }, "리뷰 수",
+            el("input", { id: "limit", type: "number", min: "2", max: "10000", value: "1000", required: true })),
+          el("label", { class: "field detail-only" }, "군집 수 (k)",
+            el("input", { id: "k", type: "number", min: "2", max: "50", value: "5", required: true })),
+          el("label", { class: "field field-wide" }, "리뷰 고르는 방식",
+            el("select", { id: "sample-mode", "aria-describedby": "sample-mode-help", onchange: showSampleModeHelp },
+              el("option", { value: "recent" }, "최신 리뷰 — 전체 반응 보기"),
+              el("option", { value: "balanced" }, "추천·비추천 반반 — 불만 찾기"))),
+          el("label", { class: "check" }, el("input", { id: "refresh", type: "checkbox" }), " 새로 수집"),
+          el("button", { id: "analyze-btn", type: "submit", class: "btn btn-primary" }, "다시 분석")),
+        el("p", { id: "sample-mode-help", class: "muted small" })),
+      el("div", { id: "output", "aria-live": "polite" })));
+  showSampleModeHelp();
+}
+
+async function loadCatalog() {
+  try {
+    const data = await request("games.json");
+    catalog = data.games;
+    for (const game of catalog) {
+      if (!knownGames.has(game.app_id)) knownGames.set(game.app_id, game);
+    }
+    $("#catalog-note").hidden = true;
+    renderCatalog();
+    if (activeAppId != null) renderGameHeader();
+  } catch {
+    $("#catalog-note").textContent = "게임 목록을 불러오지 못했어요. 이름 검색이나 App ID로 게임을 열 수 있어요.";
+    $("#catalog-note").hidden = false;
+    $("#game-grid").replaceChildren(el("button", { type: "button", class: "btn", onclick: loadCatalog }, "목록 다시 불러오기"));
+  }
+}
+
+function renderCatalog() {
+  for (const button of document.querySelectorAll(".catalog-tabs button")) {
+    button.setAttribute("aria-pressed", String(button.dataset.tab === catalogTab));
+  }
+  const filters = $("#genre-filters");
+  filters.hidden = catalogTab !== "genre";
+  const genres = ["전체", ...new Set(catalog.flatMap((game) => game.genres))];
+  filters.replaceChildren(...genres.map((label) => el("button", {
+    type: "button", class: "btn genre-chip", "aria-pressed": String(label === genre),
+    onclick: () => { genre = label; renderCatalog(); },
+  }, label)));
+  const games = catalogTab === "popular" ? catalog.filter((game) => game.popular)
+    : catalogTab === "recent" ? [...catalog].sort((a, b) => b.release_date.localeCompare(a.release_date))
+      : catalog.filter((game) => genre === "전체" || game.genres.includes(genre));
+  $("#game-grid").replaceChildren(...games.map((game) =>
+    el("a", { class: "card game-card", href: `#/game/${game.app_id}` },
+      gameImage(game),
+      el("div", { class: "game-card-body" }, el("h3", {}, game.name),
+        el("p", { class: "muted small" }, `${game.genres.join(" · ")} · ${game.release_date.slice(0, 4)}년`)))));
+}
+
+function currentGame() {
+  return knownGames.get(activeAppId) || { app_id: activeAppId, name: `App ID ${activeAppId}` };
+}
+
+function renderGameHeader() {
+  const game = currentGame();
+  $("#game-header").replaceChildren(
+    el("a", { class: "back-link", href: "#/" }, "← 게임 목록으로"),
+    el("div", { class: "game-heading" }, gameImage(game),
+      el("div", {}, el("h2", {}, game.name), el("p", { class: "muted small" }, `App ID ${game.app_id}`))));
+  if ($("#loading-game")) $("#loading-game").textContent = game.name;
+  document.title = `${game.name} · Steam Review Insight`;
+}
+
+function route() {
+  ++requestVersion;
+  ++searchVersion;
+  clearInterval(timer);
+  lastResult = null;
+  const dialog = $(".evidence-dialog");
+  if (dialog) dialog.close();
+  const match = location.hash.match(/^#\/game\/([1-9]\d*)$/);
+  activeAppId = match && Number.isSafeInteger(Number(match[1])) ? Number(match[1]) : null;
+  $("#selection-screen").hidden = activeAppId != null;
+  $("#analysis-screen").hidden = activeAppId == null;
+  $("#analyze-btn").disabled = false;
+  $("#output").replaceChildren();
+  if (activeAppId != null) {
+    renderGameHeader();
+    analyze();
+  } else {
+    document.title = "Steam Review Insight";
+    if (location.hash !== "#/") history.replaceState(null, "", "#/");
+  }
+}
+
+function showSampleModeHelp() {
+  $("#sample-mode-help").textContent = SAMPLE_MODE_HELP[$("#sample-mode").value];
+}
+
 // ---------- search ----------
 
 async function searchGames(event) {
   event.preventDefault();
   const query = $("#query").value.trim();
   if (!query) return;
+  const version = ++searchVersion;
   const list = $("#search-results");
   list.hidden = false;
   list.replaceChildren(el("li", { class: "muted" }, "검색 중…"));
   try {
     const { games } = await request(`/api/games/search?query=${encodeURIComponent(query)}`);
+    if (version !== searchVersion) return;
     list.replaceChildren(...(games.length ? games.map(gameOption)
       : [el("li", { class: "muted" }, "등록된 게임 중에 없어요. Steam 상점 주소의 App ID를 아래에 직접 넣어도 돼요.")]));
   } catch (error) {
+    if (version !== searchVersion) return;
     list.replaceChildren(el("li", { class: "error-text" }, error.message, error.detail && ` — ${error.detail}`));
   }
 }
@@ -202,9 +357,9 @@ function gameOption(game) {
 }
 
 function selectGame(game) {
-  $("#app-id").value = game.app_id;
+  knownGames.set(Number(game.app_id), { ...game, app_id: Number(game.app_id) });
   $("#search-results").hidden = true;
-  $("#selected-game").textContent = `선택됨: ${game.name ?? "이름 없음"} (App ID ${game.app_id})`;
+  location.hash = `/game/${game.app_id}`;
 }
 
 // ---------- analyze ----------
@@ -214,9 +369,13 @@ let lastResult = null;
 let mode = loadMode();
 
 async function analyze(event) {
-  event.preventDefault();
+  event?.preventDefault();
+  if (activeAppId == null || !$("#analyze-form").reportValidity()) return;
+  const version = ++requestVersion;
+  const hash = location.hash;
+  const isCurrent = () => version === requestVersion && hash === location.hash;
   const payload = {
-    app_id: Number($("#app-id").value),
+    app_id: activeAppId,
     limit: Number($("#limit").value),
     k: Number($("#k").value),
     refresh: $("#refresh").checked,
@@ -231,34 +390,63 @@ async function analyze(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    renderResult(result);
+    if (isCurrent()) renderResult(result);
   } catch (error) {
-    showError(error);
+    if (isCurrent()) showError(error);
   } finally {
-    clearInterval(timer);
-    button.disabled = false;
+    if (isCurrent()) {
+      clearInterval(timer);
+      button.disabled = false;
+    }
   }
 }
 
 function showLoading() {
   lastResult = null;
-  const seconds = el("span", {}, "0");
+  const seconds = el("span", { "aria-live": "off" }, "0");
   const started = Date.now();
   clearInterval(timer);
   timer = setInterval(() => { seconds.textContent = Math.floor((Date.now() - started) / 1000); }, 1000);
   $("#output").replaceChildren(
     el("div", { class: "card state" },
       el("div", { class: "spinner", "aria-hidden": "true" }),
-      el("p", { class: "state-title" }, "Steam 리뷰를 모아서 분석하고 있어요"),
+      el("h2", { class: "state-title" }, "분석 대기"),
+      el("p", { id: "loading-game" }, currentGame().name),
+      el("p", {}, "Steam 리뷰를 모아서 분석하고 있어요."),
       el("p", { class: "muted" }, seconds, "초 경과 · 처음 받는 게임은 리뷰 1,000건에 20초쯤, 많으면 몇 분 걸려요")));
 }
 
 function showError(error) {
   lastResult = null;
+  const shortage = error.status === 422 && /Input DataFrame is empty|Review count \(\d+\) is smaller than k \(\d+\)|No reviews to vectorize|vocabulary|no usable terms|terms remain|zero features/i.test(error.detail);
   $("#output").replaceChildren(
-    el("div", { class: "card callout danger", role: "alert" },
+    shortage ? shortageNotice(error.detail) : el("div", { class: "card state callout danger", role: "alert" },
+      el("h2", { class: "state-title" }, "분석 실패"),
       el("p", { class: "callout-title" }, error.message),
-      error.detail && el("pre", { class: "callout-detail" }, error.detail)));
+      error.detail && el("pre", { class: "callout-detail" }, error.detail),
+      el("div", { class: "state-actions" },
+        el("button", { type: "button", class: "btn btn-primary", onclick: () => analyze() }, "다시 시도"),
+        el("a", { class: "btn", href: "#/" }, "게임 목록으로"))));
+}
+
+function shortageNotice(detail = "") {
+  return el("section", { class: "card callout warn shortage", role: "status" },
+    el("h2", { class: "state-title" }, "데이터 부족"),
+    el("p", {}, "문제나 강점을 판단할 만큼 분석에 쓸 리뷰가 모이지 않았어요. 리뷰가 적거나 분석할 수 있는 단어가 부족할 수 있어요."),
+    el("p", { class: "muted small" }, "리뷰 수를 늘리거나 추천·비추천 반반 모드로 다시 분석해 보세요. 다른 게임을 골라도 좋아요."),
+    detail && el("pre", { class: "callout-detail" }, detail),
+    el("div", { class: "state-actions" },
+      el("button", { type: "button", class: "btn", disabled: Number($("#limit").value) >= 10000,
+        onclick: () => {
+          $("#limit").value = Math.min(10000, Math.max(1000, Number($("#limit").value) * 2));
+          analyze();
+        } }, "리뷰 수 늘려서 분석"),
+      el("button", { type: "button", class: "btn", onclick: () => {
+        $("#sample-mode").value = "balanced";
+        showSampleModeHelp();
+        analyze();
+      } }, "추천·비추천 반반으로 분석"),
+      el("a", { class: "btn", href: "#/" }, "다른 게임 고르기")));
 }
 
 // ---------- view mode ----------
@@ -283,10 +471,17 @@ function setMode(next) {
 
 function renderResult(result) {
   lastResult = result;
-  $("#output").replaceChildren(...(mode === "simple" ? simpleView(result) : detailView(result)));
+  if (result.game.name) knownGames.set(activeAppId, { ...currentGame(), name: result.game.name });
+  renderGameHeader();
+  const insufficient = !result.priorities.some((p) => p.issue_type !== OTHER && p.sufficient_evidence)
+    && !result.positive_aspects.some((a) => a.sufficient_evidence);
+  $("#output").replaceChildren(...[
+    insufficient && shortageNotice(),
+    ...(mode === "simple" ? simpleView(result) : detailView(result)),
+  ].filter(Boolean));
 }
 
-// ---------- simple view: plain-language summary, no clusters/sentiment/scores ----------
+// ---------- simple view: top issues and strengths with evidence ----------
 
 function verdict(ratio) {
   if (ratio >= 0.7) return ["대체로 호평", "good"];
@@ -297,19 +492,18 @@ function verdict(ratio) {
 function simpleView({ game, summary, priorities, positive_aspects, metadata }) {
   const total = summary.review_count;
   const minReviews = metadata.config.min_priority_reviews;
-  // The backend flags issues raised by too few reviews (sufficient_evidence); both views leave them out of the ranking.
+  // Both rankings use the backend's evidence threshold and ordering.
   const named = priorities.filter((p) => p.issue_type !== OTHER);
   const complaints = named.filter((p) => p.sufficient_evidence).slice(0, 3);
-  const skipped = named.filter((p) => !p.sufficient_evidence).length;
-  // Same evidence bar as complaints; the backend already sorts aspects by review count.
-  const praised = positive_aspects.filter((a) => a.review_count >= minReviews).slice(0, 3);
-  const thinPraise = positive_aspects.filter((a) => a.review_count < minReviews).length;
+  const praised = positive_aspects.filter((a) => a.sufficient_evidence).slice(0, 3);
   return [
     isBalanced(metadata) ? balancedVerdictCard(game, summary, metadata) : verdictCard(game, summary),
-    complaintSection(complaints, total, skipped, minReviews),
-    praiseSection(praised, total, thinPraise, minReviews),
+    complaintSection(complaints, summary.negative_ratio, named.filter((p) => p.sufficient_evidence)),
+    praiseSection(praised),
+    simpleThinEvidenceSection(named.filter((p) => !p.sufficient_evidence),
+      positive_aspects.filter((a) => !a.sufficient_evidence), minReviews),
     el("p", { class: "muted small footnote" },
-      `리뷰 ${num(total)}건을 자동으로 분석한 결과라 실제 의견과 다를 수 있어요. 숫자와 근거는 ‘자세히’에서 볼 수 있어요.`),
+      `리뷰 ${num(total)}건을 자동으로 분석한 결과라 실제 의견과 다를 수 있어요. 더 자세한 분석은 ‘자세히’에서 볼 수 있어요.`),
   ].filter(Boolean);
 }
 
@@ -351,57 +545,95 @@ function balancedVerdictCard(game, summary, metadata) {
       `불만을 잘 찾으려고 추천·비추천 리뷰를 반반씩(${num(summary.review_count)}건) 골라 분석했어요. 아래 내용은 이 리뷰들 기준이에요.`));
 }
 
-// A long review that touches many issues is often the most negative one for each of them;
-// show it once and let later complaints use their next representative review.
-function pickQuote(priority, shown) {
-  const reviews = priority.representative_reviews || [];
-  const pick = reviews.find((review) => !shown.has(review.text)) || reviews[0];
-  if (pick) shown.add(pick.text);
-  return pick;
-}
-
-function complaintSection(items, total, skipped, minReviews) {
-  const shown = new Set();
+function complaintSection(items, sampleNegative, ranked) {
   return el("section", { class: "section" },
-    sectionHead(items.length === 3 ? "주요 불만 TOP 3" : "주요 불만", "많이 나오고 평가도 나쁜 문제부터 보여드려요"),
+    sectionHead(items.length === 3 ? "개선할 문제 TOP 3" : "개선할 문제", "많이 나오고 평가도 나쁜 문제부터 보여드려요"),
     items.length
-      ? el("ol", { class: "complaints" }, items.map((p, i) => complaintCard(p, i + 1, total, pickQuote(p, shown))))
-      : el("p", { class: "card muted" }, "리뷰에서 눈에 띄는 불만을 찾지 못했어요."),
-    skipped > 0 && el("p", { class: "muted small" },
-      `리뷰 ${minReviews}건 미만에서만 나온 문제 ${skipped}개는 ‘근거 리뷰 부족’으로 따로 모았어요. ‘자세히’에서 볼 수 있어요.`));
+      ? el("ol", { class: "complaints" }, items.map((p, i) => complaintCard(p, i + 1, sampleNegative, ranked)))
+      : el("p", { class: "card muted" }, "순위를 매길 만큼 리뷰가 모인 문제가 없어요."));
 }
 
-function complaintCard(p, rank, total, quote) {
+function complaintReason(item, sampleNegative, ranked) {
+  const lift = (item.negative_ratio - sampleNegative) * 100;
+  const comparison = `언급 리뷰의 비추천 ${pct(item.negative_ratio, 1)} · 전체 분석 표본 ${pct(sampleNegative, 1)}`;
+  if (lift > 0) {
+    return `${comparison}보다 ${lift < 0.1 ? "0.1%p 미만" : `${lift.toFixed(1)}%p`} 높아요.`;
+  }
+  const frequencyRank = 1 + ranked.filter((p) => p.review_count > item.review_count).length;
+  return `${comparison} · 순위에 오른 불만 중 언급 수 ${frequencyRank}위예요.`;
+}
+
+function topReviewFacts(item) {
+  return el("p", { class: "top-facts" },
+    "관련 리뷰 수 ", el("b", {}, `${num(item.review_count)}건`),
+    " · 비율 ", el("b", {}, pct(item.review_ratio)), " (분석 리뷰 기준)");
+}
+
+function complaintCard(p, rank, sampleNegative, ranked) {
   const [label, , icon] = ISSUES[p.issue_type] || [p.issue_type, "other", "📝"];
   return el("li", { class: "card complaint" },
     el("span", { class: "complaint-icon", "aria-hidden": "true" }, icon),
     el("h3", {}, el("span", { class: "complaint-rank" }, `${rank}위`), label),
-    el("p", {},
-      `리뷰 ${num(total)}건 중 `, el("b", {}, `${num(p.review_count)}건`), "에서 이 문제를 이야기했고, ",
-      "그중 ", el("b", {}, pct(p.negative_ratio)), "가 게임을 비추천했어요."),
-    quote && quoteBlock(`“${quote.text}”`));
+    topReviewFacts(p),
+    el("p", { class: "selection-reason" }, "선정 이유 · ", complaintReason(p, sampleNegative, ranked)),
+    evidenceButton(label, p.representative_reviews));
 }
 
-function praiseSection(items, total, skipped, minReviews) {
-  const shown = new Set();
+function praiseSection(items) {
   return el("section", { class: "section" },
-    sectionHead(items.length === 3 ? "좋게 본 점 TOP 3" : "좋게 본 점", "리뷰에서 구체적으로 칭찬한 요소를 많이 나온 순서로 보여드려요"),
+    sectionHead(items.length === 3 ? "유지할 강점 TOP 3" : "유지할 강점", "리뷰에서 구체적으로 칭찬한 요소를 많이 나온 순서로 보여드려요"),
     items.length
-      ? el("ol", { class: "complaints praises" }, items.map((a, i) => praiseCard(a, i + 1, total, pickQuote(a, shown))))
-      : el("p", { class: "card muted" }, "리뷰에서 구체적으로 칭찬한 요소를 찾지 못했어요."),
-    skipped > 0 && el("p", { class: "muted small" },
-      `리뷰 ${minReviews}건 미만에서만 나온 요소 ${skipped}개는 ‘자세히’에서 볼 수 있어요.`));
+      ? el("ol", { class: "complaints praises" }, items.map((a, i) => praiseCard(a, i + 1)))
+      : el("p", { class: "card muted" }, "순위를 매길 만큼 리뷰가 모인 강점이 없어요."));
 }
 
-function praiseCard(a, rank, total, quote) {
+function praiseCard(a, rank) {
   const [label, icon] = POSITIVES[a.aspect_type] || [a.aspect_type, "👍"];
   return el("li", { class: "card complaint" },
     el("span", { class: "complaint-icon", "aria-hidden": "true" }, icon),
     el("h3", {}, el("span", { class: "complaint-rank" }, `${rank}위`), label),
-    el("p", {},
-      `리뷰 ${num(total)}건 중 `, el("b", {}, `${num(a.review_count)}건`), "에서 이 점을 칭찬했고, ",
-      "그중 ", el("b", {}, pct(a.positive_ratio)), "가 게임을 추천했어요."),
-    quote && quoteBlock(`“${quote.text}”`));
+    topReviewFacts(a),
+    el("p", { class: "selection-reason" },
+      `선정 이유 · 칭찬 언급 수 ${rank}위이고, 이 강점을 언급한 리뷰의 ${pct(a.positive_ratio)}가 추천했어요.`),
+    evidenceButton(label, a.representative_reviews));
+}
+
+function simpleThinEvidenceSection(complaints, strengths, minReviews) {
+  if (!complaints.length && !strengths.length) return null;
+  const row = (item, type, label) => el("li", { class: "card thin-evidence-item" },
+    el("span", { class: "muted small" }, type),
+    el("b", {}, label),
+    el("span", { class: "muted" }, `관련 리뷰 ${num(item.review_count)}건`),
+    evidenceButton(label, item.representative_reviews));
+  return el("section", { class: "section" },
+    sectionHead("근거 리뷰 부족", `최소 리뷰 수(${num(minReviews)}건)에 못 미치는 항목은 TOP 3에서 제외했어요.`),
+    el("ul", { class: "thin-evidence-list" },
+      complaints.map((p) => row(p, "문제", issueLabel(p.issue_type))),
+      strengths.map((a) => row(a, "강점", (POSITIVES[a.aspect_type] || [a.aspect_type])[0]))));
+}
+
+function evidenceButton(label, reviews) {
+  return el("button", {
+    type: "button", class: "btn evidence-button", "aria-haspopup": "dialog", "aria-label": `${label} 근거 보기`,
+    onclick: (event) => openEvidenceDialog(label, reviews, event.currentTarget),
+  }, "근거 보기");
+}
+
+function openEvidenceDialog(label, reviews, trigger) {
+  const dialog = el("dialog", {
+    class: "card evidence-dialog", "aria-labelledby": "evidence-dialog-title",
+    onclose: () => { dialog.remove(); trigger.focus(); },
+  },
+  el("div", { class: "evidence-dialog-head" },
+    el("h2", { id: "evidence-dialog-title" }, label),
+    el("button", { type: "button", class: "btn", autofocus: true, onclick: () => dialog.close() }, "닫기")),
+  reviews?.length
+    ? el("div", { class: "quotes" }, reviews.map((review) =>
+      el("blockquote", {}, el("p", {}, review.text),
+        review.review_id != null && el("cite", { class: "muted" }, `리뷰 #${review.review_id}`))))
+    : el("p", { class: "muted" }, "표시할 대표 리뷰가 없어요."));
+  document.body.append(dialog);
+  dialog.showModal();
 }
 
 // ---------- detail view ----------
@@ -567,7 +799,7 @@ function priorityRow(p, rank) {
 
 // Ranked by review count (backend order); aspects below the complaint evidence bar stay listed but unranked.
 function positiveSection(items, minReviews) {
-  const ordered = [...items.filter((a) => a.review_count >= minReviews), ...items.filter((a) => a.review_count < minReviews)];
+  const ordered = [...items.filter((a) => a.sufficient_evidence), ...items.filter((a) => !a.sufficient_evidence)];
   let rank = 0;
   return el("section", { class: "section" },
     sectionHead("좋게 본 점", [
@@ -577,7 +809,7 @@ function positiveSection(items, minReviews) {
     ].join(" · ")),
     ordered.length
       ? el("ol", { class: "priority-list positive-list" },
-        ordered.map((a) => positiveRow(a, a.review_count >= minReviews ? ++rank : null)))
+        ordered.map((a) => positiveRow(a, a.sufficient_evidence ? ++rank : null)))
       : el("p", { class: "muted" }, "리뷰에서 구체적으로 칭찬한 요소를 찾지 못했어요."));
 }
 
@@ -619,7 +851,25 @@ function clusterSection(clusters, total) {
   const ordered = [...clusters].sort((a, b) => b.review_count - a.review_count);
   return el("section", { class: "section" },
     sectionHead("리뷰 군집", "군집 라벨은 군집 전체의 대표 성격이에요. 개별 리뷰의 불만 유형은 별도이며, 한 리뷰에 여러 유형이 붙을 수 있어요."),
+    clusterChart(ordered, total),
     el("div", { class: "cluster-grid" }, ordered.map((c) => clusterCard(c, total))));
+}
+
+function clusterChart(clusters, total) {
+  return el("div", { class: "card cluster-chart" },
+    el("p", { class: "muted small" }, "막대 길이는 분석 리뷰에서 차지하는 비중이에요 · 초록: 추천 · 빨강: 비추천"),
+    clusters.map((c) => {
+      const description = `군집 ${c.cluster_id + 1} · ${clusterChip(c).textContent} · 리뷰 ${num(c.review_count)}건, 전체의 ${pct(c.review_count / total, 1)}, 추천 ${pct(c.positive_ratio, 1)}, 비추천 ${pct(c.negative_ratio, 1)}`;
+      return el("div", { class: "cluster-chart-row", role: "img", "aria-label": description },
+        el("div", { class: "cluster-chart-label", "aria-hidden": "true" },
+          el("b", {}, `군집 ${c.cluster_id + 1}`), clusterChip(c),
+          el("span", { class: "muted small" }, `${num(c.review_count)}건 · ${pct(c.review_count / total, 1)}`)),
+        el("div", { class: "cluster-chart-track", "aria-hidden": "true" },
+          el("div", { class: "cluster-chart-bar", style: width(c.review_count / total) },
+            el("span", { class: "seg-good", style: width(c.positive_ratio) }),
+            el("span", { class: "seg-bad", style: width(c.negative_ratio) }))),
+        el("p", { class: "muted small", "aria-hidden": "true" }, `추천 ${pct(c.positive_ratio, 1)} · 비추천 ${pct(c.negative_ratio, 1)}`));
+    }));
 }
 
 function clusterCard(c, total) {
@@ -661,14 +911,12 @@ function configSection(config) {
 
 // ---------- wiring ----------
 
-$("#search-form").addEventListener("submit", searchGames);
-$("#analyze-form").addEventListener("submit", analyze);
-$("#app-id").addEventListener("input", () => { $("#selected-game").textContent = ""; });
-const showSampleModeHelp = () => { $("#sample-mode-help").textContent = SAMPLE_MODE_HELP[$("#sample-mode").value]; };
-$("#sample-mode").addEventListener("change", showSampleModeHelp);
-showSampleModeHelp();
+buildScreens();
 for (const button of document.querySelectorAll(".mode-switch button")) {
   button.addEventListener("click", () => setMode(button.dataset.mode));
 }
 setMode(mode);
 checkHealth();
+window.addEventListener("hashchange", route);
+route();
+loadCatalog();

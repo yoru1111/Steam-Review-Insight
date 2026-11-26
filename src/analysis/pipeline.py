@@ -31,7 +31,8 @@ def analyze_reviews(df: pd.DataFrame, config: AnalysisConfig | None = None,
     annotate_cluster_types(clusters, working)
     priorities = calculate_priorities(working, config.priority_weights, config.clustering.representative_reviews,
                                       config.min_priority_reviews)
-    positive_aspects = summarize_positive_aspects(working, config.clustering.representative_reviews)
+    positive_aspects = summarize_positive_aspects(working, config.clustering.representative_reviews,
+                                                  config.min_priority_reviews)
 
     voted = working["voted_up"].astype(bool)
     labels_count = working["sentiment_label"].value_counts()

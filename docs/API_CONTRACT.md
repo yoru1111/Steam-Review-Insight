@@ -36,6 +36,10 @@ UI는 이 이슈를 순위에서 빼고 '근거 리뷰 부족'으로 따로 보�
 참고용으로 붙이는 값이며 탐지에는 쓰이지 않습니다. 현재 `aspect_type`은 `Gameplay`, `Graphics / Visuals`,
 `Sound / Music`, `Story / Narrative`, `Content / Exploration` 중 하나입니다.
 
+각 요소의 `sufficient_evidence`는 `review_count >= metadata.config.min_priority_reviews`를 나타내는
+불리언입니다(기본 기준 3건). 기준 미만이면 `false`이며 TOP 3에서 제외하고 '근거 리뷰 부족'으로
+따로 보여줍니다. 이 필드와 관계없이 기존 언급 리뷰 수 내림차순, 동률이면 `aspect_type` 오름차순을 유지합니다.
+
 ```json
 {
   "positive_aspects": [
@@ -44,6 +48,7 @@ UI는 이 이슈를 순위에서 빼고 '근거 리뷰 부족'으로 따로 보�
       "review_count": 24,
       "review_ratio": 0.12,
       "positive_ratio": 0.92,
+      "sufficient_evidence": true,
       "representative_reviews": [
         {"review_id": 123456789, "text": "The soundtrack is amazing, but combat feels repetitive."}
       ]

@@ -91,7 +91,7 @@ def add_positive_aspects(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def summarize_positive_aspects(
-    df: pd.DataFrame, representative_count: int = 3
+    df: pd.DataFrame, representative_count: int = 3, min_reviews: int = 3
 ) -> list[dict[str, Any]]:
     total = len(df)
     summaries: list[dict[str, Any]] = []
@@ -110,6 +110,7 @@ def summarize_positive_aspects(
             "review_count": int(len(group)),
             "review_ratio": float(len(group) / total),
             "positive_ratio": float(group["voted_up"].astype(bool).mean()),
+            "sufficient_evidence": bool(len(group) >= min_reviews),
             "representative_reviews": examples,
         })
     return sorted(summaries, key=lambda item: (-item["review_count"], item["aspect_type"]))
